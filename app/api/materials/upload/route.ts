@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { MAX_FILE_SIZE, resolveFileMime, validateFileMetadata } from "@/lib/material-constraints";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedContext } from "@/lib/supabase/auth";
 import { uuidSchema } from "@/lib/validation";
 import { toMaterialDTO } from "@/lib/workspace-data";
@@ -103,7 +104,10 @@ export async function POST(request: Request) {
     .single();
 
   if (insertError) {
-    const { error: cleanupError } = await context.supabase.storage.from("materials").remove([objectKey]);
+    const admin = createAdminClient();
+    const cleanupError = admin
+      ? (await admin.storage.from("materials").remove([objectKey])).error
+      : new Error("Server-managed Storage cleanup is not configured");
     if (cleanupError) {
       return NextResponse.json({
         error: "Upload failed, and cleanup could not be confirmed. An unused private file may remain.",

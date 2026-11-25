@@ -87,7 +87,7 @@ export async function deleteExperience(id: string): Promise<ActionResult> {
 
   const objectKeys = files.flatMap((file) => file.object_key ? [file.object_key] : []);
   if (objectKeys.length > 0) {
-    const { error } = await context.supabase.storage.from("materials").remove(objectKeys);
+    const { error } = await admin.storage.from("materials").remove(objectKeys);
     if (error) return failure("Could not confirm private file cleanup. The star was not deleted; retry to finish cleanup.");
   }
 
@@ -153,7 +153,7 @@ export async function deleteMaterial(id: string): Promise<ActionResult> {
   if (!material) return failure("This material is unavailable or no longer exists.");
 
   if (material.object_key) {
-    const { error } = await context.supabase.storage.from("materials").remove([material.object_key]);
+    const { error } = await admin.storage.from("materials").remove([material.object_key]);
     if (error) return failure("Could not confirm private file cleanup. The material record was kept; retry to finish cleanup.");
   }
 

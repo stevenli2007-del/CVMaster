@@ -163,6 +163,14 @@ try {
   assert(directMaterialDelete.error, "Owner could directly delete a material record");
   assert(directExperienceDelete.error, "Owner could directly delete an experience record");
   console.log("PASS: direct Data API deletes are denied; server-managed cleanup cannot be bypassed");
+
+  currentStep = "verify direct owner Storage delete cannot bypass database cleanup";
+  const ownerObjectDelete = await a.storage.from("materials").remove([objectKey]);
+  assert(
+    ownerObjectDelete.error || ownerObjectDelete.data.length === 0,
+    "Owner could directly delete a Storage object while its material row remained",
+  );
+  console.log("PASS: direct owner Storage delete is denied");
   console.log("CP2 isolation verification completed successfully");
 } catch {
   console.error(`FAIL: ${currentStep}. No credentials, record contents, or file contents were logged.`);

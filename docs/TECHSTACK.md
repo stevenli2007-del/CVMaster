@@ -94,11 +94,11 @@ Supabase Auth + Postgres (RLS) + private Storage
 
 ## 9. CP2 本地配置与验收
 
-1. `.env.local` 需要 `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`、`NEXT_PUBLIC_SITE_URL`，以及仅服务端使用的 `SUPABASE_SERVICE_ROLE_KEY`。本地开发时 site URL 为 `http://localhost:3000`；service role key 从 Supabase 项目 API 设置取得，绝不使用 `NEXT_PUBLIC_` 前缀、发送给浏览器或提交 Git。应用只在已验证 session 和 owner、并完成 Storage 清理后，用该 key 执行最终数据库删除。
+1. `.env.local` 需要 `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`、`NEXT_PUBLIC_SITE_URL`，以及仅服务端使用的 `SUPABASE_SERVICE_ROLE_KEY`。本地开发时 site URL 为 `http://localhost:3000`；service role key 从 Supabase 项目 API 设置取得，绝不使用 `NEXT_PUBLIC_` 前缀、发送给浏览器或提交 Git。应用只在已验证 session 和 owner 后，用该 key 协调 Storage 与数据库删除；上传登记失败时也用它清理已上传对象。
 2. 在目标 Supabase 开发项目的 SQL Editor 完整执行 `supabase/migrations/20261124220000_cp2_identity_and_materials.sql`。迁移会创建 profiles/experiences/materials、RLS、注册 profile trigger，以及 private `materials` bucket 和 Storage policies。先在开发项目验证，再审核后应用到其他环境。
    - 如果此前执行过旧版 `20261124173000` / `20261124173100`，或遇到 `relation "profiles" already exists`，仍直接完整执行这份更新后的合并 migration；它会保留现有数据并升级旧约束、触发器和 policies，不要 drop 现有表。
    - migration 使用事务且可重复执行；遇到已有数据不符合当前约束时会整体回滚，不会截断或改写用户内容。
-   - 随后执行 `supabase/migrations/20261124224500_cp2_server_managed_deletes.sql`，撤销 Data API 的直接删除权限，防止绕过文件清理。已成功执行上一份 migration 的项目只需执行这份前向修复，不要重跑或 drop 旧表。
+   - 随后按顺序执行 `supabase/migrations/20261124224500_cp2_server_managed_deletes.sql` 和 `supabase/migrations/20261124230500_cp2_server_managed_storage_deletes.sql`，撤销 Data API 记录删除与 Storage 对象直删权限，防止任一侧绕过协调清理。已成功执行第一份基础 migration 的项目只需执行这两份前向修复，不要重跑或 drop 旧表。
 3. Supabase Dashboard → Authentication → URL Configuration：Site URL 设置为当前应用 origin；Redirect URLs 加入 `http://localhost:3000/auth/confirm?next=/` 和 `http://localhost:3000/auth/confirm?next=/reset-password`。部署环境使用对应 HTTPS origin 添加同样两个路径。默认邮件模板可继续使用；`/auth/confirm` 同时处理 code 与 token_hash 确认。
 4. 上传限制为每个文件 4 MB，每批最多 5 个；允许 PNG/JPG/WebP/GIF、PDF、TXT/MD/CSV、DOC/DOCX。链接仅保存文本，不抓取；CP2 不调用 AI。
 5. 运行 `npm run dev`。手动验收：注册/确认邮箱/登录 → 创建并重命名 star → 添加 note 和链接 → 上传及下载文件 → 刷新确认数据仍在 → 删除素材和 star → 修改 profile → 登出 → 请求密码重置并设置新密码。
