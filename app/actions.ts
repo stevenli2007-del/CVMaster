@@ -111,12 +111,12 @@ export async function createTextMaterial(experienceId: string, value: string): P
 
   const trimmed = value.trim();
   const looksLikeLink = /^https?:\/\//i.test(trimmed);
-  const link = linkSchema.safeParse(trimmed);
+  const link = looksLikeLink ? linkSchema.safeParse(trimmed) : null;
   const note = noteSchema.safeParse(trimmed);
-  if (looksLikeLink && !link.success) return failure("Enter a valid http(s) URL without embedded credentials.");
+  if (looksLikeLink && !link?.success) return failure("Enter a valid http(s) URL without embedded credentials.");
   if (!looksLikeLink && !note.success) return failure("Use a note of 1–20,000 characters.");
 
-  const isLink = looksLikeLink && link.success;
+  const isLink = link?.success === true;
   const hostname = isLink ? new URL(link.data).hostname.toLowerCase() : "";
   const type = isLink ? (hostname === "github.com" || hostname === "www.github.com" ? "github" : "web") : "note";
   const { data, error } = await context.supabase

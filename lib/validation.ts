@@ -12,8 +12,12 @@ export const linkSchema = z
   .url()
   .max(2048)
   .refine((value) => {
-    const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
+    try {
+      const url = new URL(value);
+      return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
+    } catch {
+      return false;
+    }
   });
 
 export function formString(formData: FormData, key: string) {
