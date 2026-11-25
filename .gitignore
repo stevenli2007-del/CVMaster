@@ -1,0 +1,11 @@
+.DS_Store
+.env*
+!.env.example
+node_modules/
+.next/
+out/
+dist/
+build/
+next-env.d.ts
+*.tsbuildinfo
+.vercel

@@ -1,0 +1,81 @@
+:root {
+  color-scheme: dark;
+  --space-950: #04050d;
+  --space-900: #090d1d;
+  --space-800: #10162b;
+  --text-primary: #e8ecff;
+  --text-muted: #8a93b8;
+  --line-soft: rgba(160, 175, 255, 0.2);
+  --accent-violet: #8b83ff;
+  --accent-cyan: #67e8f9;
+  --accent-green: #86efac;
+  --accent-pink: #f9a8d4;
+  --accent-amber: #fcd34d;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-width: 900px;
+  min-height: 100%;
+  margin: 0;
+  background: var(--space-950);
+}
+
+body {
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+button,
+input,
+textarea {
+  outline: none;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid #b4b0ff;
+  outline-offset: 3px;
+}
+
+::selection {
+  color: #fff;
+  background: rgba(113, 104, 232, 0.65);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

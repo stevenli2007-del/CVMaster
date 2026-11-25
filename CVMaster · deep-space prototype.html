@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CVMaster · deep-space prototype</title>
+<style>
+:root{color-scheme:dark;--fg:#e8ecff;--mut:#8a93b8;--line:rgba(160,175,255,.2);--glass:rgba(10,13,32,.8);--ok:#6ee7b7;--inf:#fbbf24;--mis:#fb7185;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{margin:0;height:100%;overflow:hidden;color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(1200px 700px at 72% 18%,rgba(80,55,170,.24),transparent 60%),radial-gradient(900px 600px at 12% 88%,rgba(20,100,160,.2),transparent 60%),#04050d}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+#brand{position:fixed;left:18px;top:calc(env(safe-area-inset-top,0px) + 14px);font-size:13px;color:var(--mut)}
+#brand b{color:var(--fg);font-weight:600}
+#prompt{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);font:italic 400 clamp(30px,6vw,64px)/1.1 "Iowan Old Style","Palatino Linotype",Georgia,serif;opacity:.55;pointer-events:none;transition:opacity 1.2s;text-align:center}
+#prompt small{display:block;margin-top:14px;font:400 14px/1.4 ui-sans-serif,system-ui,sans-serif;color:var(--mut)}
+#prompt.gone{opacity:0}
+body.drag #prompt{opacity:1}
+#bar{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 20px);transform:translateX(-50%);z-index:3;transition:opacity .4s}
+body.open #bar{opacity:0;pointer-events:none}
+button{font:inherit;font-size:13px;color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:10px 16px;cursor:pointer;backdrop-filter:blur(8px)}
+button:hover{border-color:#9fb0ff}
+button:focus-visible,input:focus-visible{outline:2px solid #9fb0ff;outline-offset:2px}
+#new{background:#4f46e5;border-color:#818cf8;padding:13px 24px;font-size:15px}
+#toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 54px);transform:translateX(-50%);background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:8px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:6}
+#toast.on{opacity:1}
+#panel{position:fixed;top:0;right:0;bottom:0;width:min(430px,40vw);box-sizing:border-box;padding:calc(env(safe-area-inset-top,0px) + 22px) 22px calc(env(safe-area-inset-bottom,0px) + 22px);background:var(--glass);backdrop-filter:blur(18px);border-left:1px solid var(--line);transform:translateX(104%);transition:transform .45s cubic-bezier(.2,.8,.2,1);overflow:auto;z-index:5}
+#panel.open{transform:none}
+@media (max-width:899px){#panel{top:auto;left:0;width:100%;height:56%;border-left:0;border-top:1px solid var(--line);transform:translateY(104%)}#panel.open{transform:none}}
+#cl{position:absolute;right:14px;top:calc(env(safe-area-inset-top,0px) + 12px);padding:6px 12px}
+.title{width:calc(100% - 70px);background:none;border:0;border-bottom:1px solid var(--line);color:var(--fg);font:italic 400 28px/1.2 "Iowan Old Style",Georgia,serif;padding:2px 0 6px}
+.dock{margin:16px 0 0;padding:12px;border:1px dashed rgba(160,175,255,.35);border-radius:14px}
+#pin{width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:10px;color:var(--fg);padding:10px 12px;font-size:14px}
+.dbtns{display:flex;gap:8px;margin-top:8px}
+#hs{touch-action:none;user-select:none;-webkit-user-select:none}
+#hs.rec{background:#be123c;border-color:#fb7185}
+.st{font-size:12px;color:var(--mut);margin-top:8px;min-height:16px}
+h3{font-size:13px;font-weight:600;color:var(--mut);margin:20px 0 8px}
+.mat{display:flex;gap:10px;font-size:13px;padding:6px 0;border-bottom:1px solid rgba(160,175,255,.08);word-break:break-word;animation:in .4s both}
+.mat i{font-style:normal;flex:none;width:18px}
+.row{padding:11px 0;border-bottom:1px solid rgba(160,175,255,.1);animation:in .4s both}
+@keyframes in{from{opacity:0;transform:translateY(6px)}}
+.k{font-size:13px;color:var(--mut);display:flex;gap:8px;align-items:center;margin-bottom:4px}
+.v{font-size:15px;line-height:1.45}.m{color:var(--mut);font-size:13px}
+.src{font-size:12px;color:var(--mut);margin-top:3px}
+.chip{font-size:11px;padding:1px 8px;border-radius:99px;border:1px solid}
+.chip.confirmed{color:var(--ok)}.chip.inferred{color:var(--inf)}.chip.missing{color:var(--mis)}
+.act{display:flex;gap:6px;margin-top:8px}.act button{padding:4px 12px;font-size:12px}
+.ans{width:100%;box-sizing:border-box;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px;color:var(--fg);padding:8px 10px;font-size:14px}
+.note{font-size:12px;color:var(--mut);margin-top:20px;line-height:1.5}
+.box{position:relative;margin-top:18px}
+#pin{display:block;width:100%;box-sizing:border-box;min-height:130px;resize:none;background:rgba(255,255,255,.05);border:1px dashed rgba(160,175,255,.45);border-radius:14px;color:var(--fg);padding:14px 14px 50px;font:inherit;font-size:15px;line-height:1.5}
+.tools{position:absolute;right:10px;bottom:10px;display:flex;gap:6px}
+.tools button{padding:6px 10px;font-size:15px;line-height:1}
+#mic{touch-action:none;user-select:none;-webkit-user-select:none}
+#mic.rec{background:#be123c;border-color:#fb7185}
+.gen{margin-top:14px;width:100%;background:#4f46e5;border-color:#818cf8;padding:12px;font-size:14px}
+.gen:disabled{opacity:.55;cursor:default}
+#post{margin-top:16px;font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+#post h4{font:italic 400 21px/1.3 "Iowan Old Style",Georgia,serif;margin:14px 0 4px;white-space:normal}
+.pbar{display:flex;gap:8px;margin-top:12px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="brand"><b>CVMaster</b> prototype. AI sorting is simulated here.</div>
+<div id="prompt">What happened?<small>Make a star for it, then drop anything inside.</small></div>
+<div id="toast" role="status"></div>
+<div id="bar"><button id="new">Make a new star</button></div>
+<aside id="panel" aria-label="Star details"></aside>
+<script>
+const $=s=>document.querySelector(s);
+const cv=$('#c'),g=cv.getContext('2d');
+let W,H,D;
+function rs(){D=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;cv.width=W*D;cv.height=H*D;g.setTransform(D,0,0,D,0,0)}
+addEventListener('resize',rs);rs();
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TYPES={image:{c:'#f9a8d4',i:'🖼'},github:{c:'#86efac',i:'⌥'},web:{c:'#67e8f9',i:'🔗'},voice:{c:'#fcd34d',i:'🎙'},note:{c:'#e2e8f0',i:'✎'}};
+const mouse={x:-999,y:-999};
+const stars=Array.from({length:RM?70:(W<700?130:300)},()=>({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.3+.2,a:Math.random()*.6+.2,vx:(Math.random()-.5)*.08,vy:(Math.random()-.5)*.08,ox:0,oy:0,p:Math.random()*6}));
+const items=[],planets=[];
+let hover=null,cur=null,tip=null,NOW=0;
+const PW=()=>W>=900?Math.min(430,W*.4):0;
+const focusPt=()=>W>=900?[(W-PW())/2,H*.46]:[W/2,H*.2];
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function classify(t){return /github\.com\//i.test(t)?'github':/^https?:\/\//i.test(t)?'web':'note'}
+let tt;function toast(s){const e=$('#toast');e.textContent=s;e.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>e.classList.remove('on'),2600)}
+function setStatus(p,s){if(cur===p&&$('#st'))$('#st').textContent=s}
+
+function add(p,type,label,sx,sy){
+  const it={type,label:label.slice(0,160),planet:p,state:'fly',x:sx??(W>=900?W-PW():W/2),y:sy??H*.62,go:NOW,born:NOW,
+    k:1.5+Math.random()*1.1,q:.3+Math.random()*.7,rot:Math.random()*3.14,a:Math.random()*6.283,sp:(2+Math.random()*4)*1e-4*(Math.random()<.5?-1:1),w:6e-4+Math.random()*8e-4,ph:Math.random()*6,spin:(Math.random()-.5)*.004};
+  items.push(it);p.items.push(it);p.busy=(p.busy||0)+1;
+  setStatus(p,'Sorting your material…');
+  setTimeout(()=>{p.busy--;if(!p.busy){if(cur===p)setStatus(p,'Sorted. '+p.items.length+' fragments orbit this star.')}},1500);
+  if(cur===p)renderBody();
+}
+function orbPos(it,t){
+  const p=it.planet,a=it.a+t*it.sp,R=it.k*p.rr*(1+.1*Math.sin(t*it.w+it.ph)),ox=Math.cos(a)*R,oy=Math.sin(a)*R*it.q,c=Math.cos(it.rot),s=Math.sin(it.rot);
+  return[p.x+ox*c-oy*s,p.y+ox*s+oy*c,Math.sin(a)];
+}
+function stepItem(it,t){
+  const o=orbPos(it,t);it.depth=o[2];
+  if(it.state==='fly'){
+    it.px=it.x;it.py=it.y;if(t<it.go)return;
+    it.x+=(o[0]-it.x)*.05;it.y+=(o[1]-it.y)*.05;
+    if(Math.hypot(o[0]-it.x,o[1]-it.y)<6){it.state='orbit';it.planet.pulse=1}
+  }else{it.x=o[0];it.y=o[1]}
+}
+function drawItem(it,t){
+  const c=TYPES[it.type].c,r=2.8,d=(cur&&cur!==it.planet)?.35:1;
+  if(it.state==='fly'&&it.px!=null){g.globalAlpha=.4*d;g.strokeStyle=c;g.lineWidth=1;g.beginPath();g.moveTo(it.px,it.py);g.lineTo(it.x,it.y);g.stroke()}
+  const gr=g.createRadialGradient(it.x,it.y,0,it.x,it.y,r*4.5);gr.addColorStop(0,c);gr.addColorStop(1,'rgba(0,0,0,0)');
+  g.globalAlpha=.35*d;g.fillStyle=gr;g.beginPath();g.arc(it.x,it.y,r*4.5,0,6.283);g.fill();
+  g.globalAlpha=d;g.fillStyle=c;g.save();g.translate(it.x,it.y);g.rotate(t*it.spin);
+  g.beginPath();g.moveTo(0,-r*1.5);g.lineTo(r,0);g.lineTo(0,r*1.5);g.lineTo(-r,0);g.closePath();g.fill();g.restore();
+  const age=t-it.born;
+  if(age<1600){g.globalAlpha=(1-age/1600)*.6*d;g.strokeStyle=c;g.lineWidth=1;g.beginPath();g.arc(it.x,it.y,6+age/60,0,6.283);g.stroke()}
+  g.globalAlpha=1;if(Math.hypot(it.x-mouse.x,it.y-mouse.y)<16)tip=it;
+}
+function drawPlanet(p,t){
+  const k=Math.max(0,Math.min(1,(t-p.t0)/1300)),e=1-Math.pow(1-k,3);
+  const dim=(cur&&cur!==p)?.4:1;
+  if(k<=0){g.strokeStyle='hsla('+p.h+',80%,70%,.4)';g.lineWidth=1;g.beginPath();g.arc(p.x,p.y,10+8*Math.abs(Math.sin(t/250)),0,6.283);g.stroke();return}
+  p.lit+=(Math.min(1,p.items.length/10)-p.lit)*.05;
+  p.pulse=(p.pulse||0)*.94;
+  const r=p.rr*e*(1+.1*p.pulse),L=50+p.lit*18,hov=hover===p;
+  g.globalAlpha=dim;
+  let gr=g.createRadialGradient(p.x,p.y,r*.6,p.x,p.y,r*3.2);
+  gr.addColorStop(0,'hsla('+p.h+',85%,60%,'+(.3+p.lit*.25+hov*.12+p.pulse*.2)+')');gr.addColorStop(1,'hsla('+p.h+',85%,60%,0)');
+  g.fillStyle=gr;g.beginPath();g.arc(p.x,p.y,r*3.2,0,6.283);g.fill();
+  items.forEach(it=>{if(it.planet===p&&it.state==='orbit'&&it.depth<0)drawItem(it,t)});
+  g.globalAlpha=dim;
+  gr=g.createRadialGradient(p.x-r*.35,p.y-r*.4,r*.1,p.x,p.y,r);
+  gr.addColorStop(0,'hsl('+p.h+',80%,'+(L+22)+'%)');gr.addColorStop(.6,'hsl('+p.h+',65%,'+(L-12)+'%)');gr.addColorStop(1,'hsl('+(p.h+30)+',60%,9%)');
+  g.fillStyle=gr;g.beginPath();g.arc(p.x,p.y,r,0,6.283);g.fill();
+  g.textAlign='center';g.fillStyle='rgba(232,236,255,'+(.8+hov*.2)+')';g.font='500 14px ui-sans-serif,system-ui,sans-serif';
+  g.fillText(p.name,p.x,p.y+r*1.4+20);
+  g.fillStyle='rgba(160,172,215,.85)';g.font='12px ui-sans-serif,system-ui,sans-serif';
+  g.fillText(hov&&cur!==p?'Open':p.items.length+' fragments',p.x,p.y+r*1.4+36);
+  g.globalAlpha=1;
+}
+function frame(t){
+  NOW=t;g.clearRect(0,0,W,H);tip=null;
+  for(const s of stars){
+    if(!RM){s.x+=s.vx;s.y+=s.vy}
+    if(s.x<0)s.x=W;if(s.x>W)s.x=0;if(s.y<0)s.y=H;if(s.y>H)s.y=0;
+    const dx=s.x+s.ox-mouse.x,dy=s.y+s.oy-mouse.y,d=Math.hypot(dx,dy);
+    if(d<110&&d>0){s.ox+=dx/d*(110-d)*.03;s.oy+=dy/d*(110-d)*.03}
+    s.ox*=.94;s.oy*=.94;
+    const px=s.x+s.ox,py=s.y+s.oy;
+    g.globalAlpha=s.a*(.7+.3*Math.sin(t/900+s.p));g.fillStyle='#cfd8ff';g.beginPath();g.arc(px,py,s.r,0,6.283);g.fill();
+    if(d<140){g.globalAlpha=(1-d/140)*.35;g.strokeStyle='#9fb0ff';g.lineWidth=.6;g.beginPath();g.moveTo(px,py);g.lineTo(mouse.x,mouse.y);g.stroke()}
+  }
+  g.globalAlpha=1;
+  planets.forEach(p=>{
+    const f=cur===p?focusPt():[p.hx,p.hy];p.x+=(f[0]-p.x)*.07;p.y+=(f[1]-p.y)*.07;
+    p.rr+=(Math.min(W<700?44:60,28+p.items.length*2.5)-p.rr)*.04;
+  });
+  for(let i=1;i<planets.length;i++){
+    const a=planets[i-1],b=planets[i];if(t<b.t0+800)continue;
+    const mx=(a.x+b.x)/2+(b.y-a.y)*.15,my=(a.y+b.y)/2-(b.x-a.x)*.15,dm=cur?.4:1;
+    g.globalAlpha=dm;g.strokeStyle='rgba(150,170,255,.22)';g.lineWidth=1;g.beginPath();g.moveTo(a.x,a.y);g.quadraticCurveTo(mx,my,b.x,b.y);g.stroke();
+    for(let j=0;j<4;j++){const u=(t*1.2e-4+j/4)%1,v=1-u;g.fillStyle='rgba(190,205,255,.85)';g.beginPath();g.arc(v*v*a.x+2*v*u*mx+u*u*b.x,v*v*a.y+2*v*u*my+u*u*b.y,1.6,0,6.283);g.fill()}
+    g.globalAlpha=1;
+  }
+  items.forEach(it=>stepItem(it,t));
+  planets.forEach(p=>drawPlanet(p,t));
+  items.forEach(it=>{if(it.state==='fly'||it.depth>=0)drawItem(it,t)});
+  if(tip){g.globalAlpha=1;g.font='12px ui-sans-serif,system-ui,sans-serif';const s=tip.label.length>46?tip.label.slice(0,46)+'…':tip.label,w=g.measureText(s).width+16;
+    g.fillStyle='rgba(10,13,32,.9)';g.fillRect(tip.x-w/2,tip.y-34,w,22);g.fillStyle='#e8ecff';g.textAlign='center';g.fillText(s,tip.x,tip.y-19)}
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+const hit=(x,y,m)=>planets.find(p=>NOW>p.t0+600&&Math.hypot(x-p.x,y-p.y)<p.rr*(m||1)+12);
+$('#new').onclick=()=>{
+  const i=planets.length,m=Math.min(W,H);
+  const p={name:'Untitled star',items:[],h:(i*67+215)%360,lit:0,rr:10,t0:NOW+400,rm:new Set(),
+    hx:i?W/2+Math.cos(i*2.4)*Math.min(W*.3,m*.5):W/2,hy:i?H*.46+Math.sin(i*2.4)*H*.2:H*.44};
+  p.x=p.hx;p.y=p.hy;planets.push(p);
+  $('#prompt').classList.add('gone');openP(p);const n=$('#pn');n.focus();n.select();
+};
+function ingest(dt,px,py){
+  const p=hit(px,py,2.4)||cur;
+  if(!p){toast(planets.length?'Drop onto a star, or open one first.':'Make a star first, then drop things onto it.');return}
+  Array.from(dt.files||[]).forEach(f=>add(p,f.type.startsWith('image/')?'image':f.type.startsWith('audio/')?'voice':'note',f.name,px,py));
+  const t=dt.getData('text/uri-list')||dt.getData('text/plain');
+  if(t&&!(dt.files&&dt.files.length))t.split(/\r?\n/).map(s=>s.trim()).filter(s=>s&&s[0]!=='#').forEach(s=>add(p,classify(s),s,px,py));
+}
+addEventListener('dragover',e=>{e.preventDefault();document.body.classList.add('drag')});
+addEventListener('dragleave',e=>{if(!e.relatedTarget)document.body.classList.remove('drag')});
+addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('drag');ingest(e.dataTransfer,e.clientX,e.clientY)});
+addEventListener('paste',e=>{if(/INPUT|TEXTAREA/.test(e.target.tagName)||!cur)return;ingest(e.clipboardData,W/2,H*.5)});
+addEventListener('pointermove',e=>{mouse.x=e.clientX;mouse.y=e.clientY;hover=hit(e.clientX,e.clientY)||null;cv.style.cursor=hover?'pointer':'default'});
+addEventListener('pointerleave',()=>{mouse.x=mouse.y=-999});
+cv.addEventListener('click',e=>{const p=hit(e.clientX,e.clientY);p?openP(p):closeP()});
+addEventListener('keydown',e=>{if(e.key==='Escape')closeP()});
+
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null,dict=null,sampleFn=null,vbuf='',vpart='',recOn=false;
+if(window.claude&&claude.use){
+  claude.use('dictation').then(d=>{if(!d)return;dict=d;d.onFinal(({text})=>{vbuf+=(vbuf?' ':'')+text;vpart=''});d.onPartial(({text})=>{vpart=text;if(cur)setStatus(cur,'Listening… '+text)})}).catch(()=>{});
+  claude.use('sample').then(s=>{sampleFn=s}).catch(()=>{});
+}
+function setMic(on){const b=$('#mic');if(b)b.classList.toggle('rec',on)}
+function startSpeak(){
+  const pl=cur;if(!pl||recOn)return;vbuf='';vpart='';
+  if(dict){
+    recOn=true;setMic(true);setStatus(pl,'Listening… keep holding.');
+    dict.start().catch(()=>{recOn=false;setMic(false);setStatus(pl,'The microphone isn’t available here. Type a note instead.')});
+    return;
+  }
+  if(!SR){setStatus(pl,'Speech capture isn’t available in this browser. Type a note instead.');return}
+  rec=new SR();rec.interimResults=true;rec.continuous=true;
+  rec.onresult=e=>{vbuf=Array.from(e.results).map(r=>r[0].transcript).join('')};
+  rec.onerror=()=>setStatus(pl,'The microphone isn’t available here. Type a note instead.');
+  rec.onend=()=>{recOn=false;setMic(false);rec=null;const t=vbuf.trim();if(t)add(pl,'voice',t)};
+  try{rec.start();recOn=true;setMic(true);setStatus(pl,'Listening… keep holding.')}catch(x){rec=null}
+}
+async function stopSpeak(){
+  if(!recOn)return;const pl=cur;
+  if(rec){rec.stop();return}
+  recOn=false;setMic(false);
+  try{await dict.stop()}catch(x){}
+  const t=(vbuf+' '+vpart).trim();vbuf=vpart='';
+  if(t&&pl)add(pl,'voice',t);else if(pl)setStatus(pl,'Didn’t catch anything. Hold the mic and try again.');
+}
+
+function md(t){return esc(t).replace(/^#{1,3} (.*)$/gm,'<h4>$1</h4>').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}
+function showPost(p){const e=$('#post');if(!e||cur!==p)return;e.innerHTML=p.post?md(p.post)+'<div class="pbar"><button id="cp">Copy</button></div>':''}
+async function genPost(){
+  const p=cur;if(!p)return;
+  if(!p.items.length){setStatus(p,'Drop a few things in first, then generate.');return}
+  const b=$('#gen');b.disabled=true;b.textContent='Writing…';
+  const mats=p.items.map((i,n)=>(n+1)+'. ['+i.type+'] '+i.label).join('\n');
+  const prompt='You write dev posts for a student developer’s portfolio. Using ONLY the materials below, write a first-person dev post about “'+p.name+'”. Structure: a short title, a one-paragraph summary, then the sections What I built, How it went (challenges and decisions), Tech, and What I learned. Keep it under 350 words, plain and concrete. Photos are listed by filename only, so do not describe their content. Never invent facts, numbers or results that are not in the materials. Where something important is missing, add a line like [Add: what you shipped] for the author to fill in. Output Markdown only.\n\nMaterials:\n'+mats;
+  try{
+    if(!sampleFn)throw{code:'none'};
+    await sampleFn(prompt,{cache:false,onText:({text})=>{p.post=text;showPost(p)}});
+    setStatus(p,'Done. Edit it wherever you like before you post it.');
+  }catch(e){
+    if(!p.post)p.post='# '+p.name+'\n\nWhat I have so far:\n'+p.items.map(i=>'- '+i.label).join('\n')+'\n\n[Add: what you built, what went wrong, what you learned]';
+    showPost(p);
+    setStatus(p,e&&e.code==='not_granted'?'AI access was declined, so this is a plain outline.':'AI isn’t available in this view, so this is a plain outline built from your materials.');
+  }
+  const b2=$('#gen');if(b2){b2.disabled=false;b2.textContent='Generate a dev post'}
+}
+
+function openP(p){
+  cur=p;
+  $('#panel').innerHTML='<button id="cl">Close</button><input class="title" id="pn" value="'+esc(p.name)+'" aria-label="Star name">'
+   +'<div class="box"><textarea id="pin" placeholder="Drop anything, AI sorts it" aria-label="Drop anything, AI sorts it"></textarea>'
+   +'<div class="tools"><button id="ph" aria-label="Add photo">🖼</button><button id="mic" aria-label="Hold to speak">🎙</button></div></div>'
+   +'<div class="st" id="st" aria-live="polite"></div>'
+   +'<button id="gen" class="gen">Generate a dev post</button><div id="post"></div><input type="file" id="fi" accept="image/*" multiple hidden>';
+  $('#cl').onclick=closeP;
+  $('#pn').oninput=e=>{p.name=e.target.value||'Untitled star'};
+  $('#pin').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&e.target.value.trim()){e.preventDefault();const v=e.target.value.trim();e.target.value='';v.split(/\n+/).forEach(s=>add(p,classify(s.trim()),s.trim()))}};
+  $('#ph').onclick=()=>$('#fi').click();
+  $('#fi').onchange=e=>{Array.from(e.target.files).forEach(f=>add(p,'image',f.name));e.target.value=''};
+  const m=$('#mic');m.onpointerdown=e=>{e.preventDefault();startSpeak()};
+  ['pointerup','pointerleave','pointercancel'].forEach(n=>m.addEventListener(n,stopSpeak));
+  $('#gen').onclick=genPost;
+  $('#post').onclick=e=>{if(e.target.id==='cp'){navigator.clipboard.writeText(p.post).then(()=>toast('Copied.')).catch(()=>toast('Copy was blocked. Select the text and copy it.'))}};
+  renderBody();showPost(p);$('#panel').classList.add('open');document.body.classList.add('open');
+}
+function closeP(){cur=null;stopSpeak();$('#panel').classList.remove('open');document.body.classList.remove('open')}
+function renderBody(){
+  const p=cur,s=$('#st');if(!p||!s||p.busy)return;
+  s.textContent=p.items.length?p.items.length+' fragments orbit this star.':'Paste a link, type a note, add a photo, or hold the mic. You can also drag files onto the page.';
+}
+</script>
+</body>
+</html>
