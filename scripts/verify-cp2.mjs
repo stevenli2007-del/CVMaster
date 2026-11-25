@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 const required = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
   "CP2_TEST_USER_A_EMAIL",
   "CP2_TEST_USER_A_PASSWORD",
   "CP2_TEST_USER_B_EMAIL",
@@ -20,6 +21,7 @@ const options = { auth: { persistSession: false, autoRefreshToken: false } };
 const a = createClient(url, key, options);
 const b = createClient(url, key, options);
 const anonymous = createClient(url, key, options);
+const cleanupAdmin = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, options);
 let currentStep = "setup";
 let experienceA;
 let experienceB;
@@ -38,9 +40,22 @@ async function signIn(client, email, password) {
 async function cleanup() {
   let cleanupFailed = false;
   try {
-    if (objectKey) await a.storage.from("materials").remove([objectKey]);
-    if (experienceA) await a.from("experiences").delete().eq("id", experienceA);
-    if (experienceB) await b.from("experiences").delete().eq("id", experienceB);
+    let fileRemoved = !objectKey;
+    if (objectKey) {
+      const result = await cleanupAdmin.storage.from("materials").remove([objectKey]);
+      if (result.error) cleanupFailed = true;
+      else fileRemoved = true;
+    }
+    // Keep the owning experience if file removal failed so its object key is
+    // retained for a later cleanup retry instead of creating an orphan.
+    if (experienceA && fileRemoved) {
+      const result = await cleanupAdmin.from("experiences").delete().eq("id", experienceA);
+      if (result.error) cleanupFailed = true;
+    }
+    if (experienceB) {
+      const result = await cleanupAdmin.from("experiences").delete().eq("id", experienceB);
+      if (result.error) cleanupFailed = true;
+    }
   } catch {
     cleanupFailed = true;
   }
@@ -139,6 +154,15 @@ try {
   const ownerCheck = await a.from("experiences").select("id").eq("id", experienceA).single();
   assert(!ownerCheck.error && ownerCheck.data, "Cross-user probes changed owner data");
   console.log("PASS: owner data remains intact after rejected cross-user writes");
+
+  currentStep = "verify direct Data API deletes cannot bypass file cleanup";
+  const [directMaterialDelete, directExperienceDelete] = await Promise.all([
+    a.from("materials").delete().eq("id", noteA.data.id),
+    a.from("experiences").delete().eq("id", experienceA),
+  ]);
+  assert(directMaterialDelete.error, "Owner could directly delete a material record");
+  assert(directExperienceDelete.error, "Owner could directly delete an experience record");
+  console.log("PASS: direct Data API deletes are denied; server-managed cleanup cannot be bypassed");
   console.log("CP2 isolation verification completed successfully");
 } catch {
   console.error(`FAIL: ${currentStep}. No credentials, record contents, or file contents were logged.`);

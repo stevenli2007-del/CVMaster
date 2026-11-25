@@ -1,19 +1,58 @@
 import { NextResponse } from "next/server";
-import { resolveFileMime, validateFileMetadata } from "@/lib/material-constraints";
+import { MAX_FILE_SIZE, resolveFileMime, validateFileMetadata } from "@/lib/material-constraints";
 import { getAuthenticatedContext } from "@/lib/supabase/auth";
 import { uuidSchema } from "@/lib/validation";
 import { toMaterialDTO } from "@/lib/workspace-data";
 
 export const runtime = "nodejs";
 
+// Multipart framing, the experience UUID and a bounded filename/header budget.
+// The actual file is still validated independently after parsing.
+const MAX_MULTIPART_BODY_SIZE = MAX_FILE_SIZE + 64 * 1024;
+
 export async function POST(request: Request) {
   const context = await getAuthenticatedContext();
   if (!context) return NextResponse.json({ error: "Your session has expired. Sign in again." }, { status: 401 });
 
+  const contentLengthHeader = request.headers.get("content-length");
+  if (contentLengthHeader !== null) {
+    const contentLength = Number(contentLengthHeader);
+    if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+      return NextResponse.json({ error: "Invalid upload size. Please try again." }, { status: 400 });
+    }
+    if (contentLength > MAX_MULTIPART_BODY_SIZE) {
+      return NextResponse.json({ error: "The upload is larger than 4 MB. Choose a smaller file." }, { status: 413 });
+    }
+  }
+  if (!request.body) {
+    return NextResponse.json({ error: "Choose a star and one file to upload." }, { status: 400 });
+  }
+
+  let receivedBytes = 0;
+  const limitedBody = request.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      receivedBytes += chunk.byteLength;
+      if (receivedBytes > MAX_MULTIPART_BODY_SIZE) {
+        controller.error(new Error("Multipart upload exceeded the request limit"));
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+  }));
+  const limitedRequest = new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: limitedBody,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+
   let formData: FormData;
   try {
-    formData = await request.formData();
+    formData = await limitedRequest.formData();
   } catch {
+    if (receivedBytes > MAX_MULTIPART_BODY_SIZE) {
+      return NextResponse.json({ error: "The upload is larger than 4 MB. Choose a smaller file." }, { status: 413 });
+    }
     return NextResponse.json({ error: "Could not read this upload. Please try again." }, { status: 400 });
   }
 
@@ -64,7 +103,12 @@ export async function POST(request: Request) {
     .single();
 
   if (insertError) {
-    await context.supabase.storage.from("materials").remove([objectKey]);
+    const { error: cleanupError } = await context.supabase.storage.from("materials").remove([objectKey]);
+    if (cleanupError) {
+      return NextResponse.json({
+        error: "Upload failed, and cleanup could not be confirmed. An unused private file may remain.",
+      }, { status: 502 });
+    }
     return NextResponse.json({ error: "The file could not be registered. Upload was rolled back; please retry." }, { status: 502 });
   }
 

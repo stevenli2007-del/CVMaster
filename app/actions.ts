@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedContext } from "@/lib/supabase/auth";
 import type { ActionResult, ExperienceDTO, MaterialDTO, ProfileDTO } from "@/lib/types";
 import { displayNameSchema, experienceNameSchema, linkSchema, noteSchema, uuidSchema } from "@/lib/validation";
@@ -73,6 +74,8 @@ export async function deleteExperience(id: string): Promise<ActionResult> {
   const context = await getAuthenticatedContext();
   if (!context) return failure("Your session has expired. Sign in again.");
   if (!uuidSchema.safeParse(id).success) return failure("This star is unavailable.");
+  const admin = createAdminClient();
+  if (!admin) return failure("Deletion is temporarily unavailable. Please try again later.");
 
   const { data: files, error: filesError } = await context.supabase
     .from("materials")
@@ -85,10 +88,10 @@ export async function deleteExperience(id: string): Promise<ActionResult> {
   const objectKeys = files.flatMap((file) => file.object_key ? [file.object_key] : []);
   if (objectKeys.length > 0) {
     const { error } = await context.supabase.storage.from("materials").remove(objectKeys);
-    if (error) return failure("Could not remove the private files. Nothing was deleted; please retry.");
+    if (error) return failure("Could not confirm private file cleanup. The star was not deleted; retry to finish cleanup.");
   }
 
-  const { data, error } = await context.supabase
+  const { data, error } = await admin
     .from("experiences")
     .delete()
     .eq("id", id)
@@ -137,6 +140,8 @@ export async function deleteMaterial(id: string): Promise<ActionResult> {
   const context = await getAuthenticatedContext();
   if (!context) return failure("Your session has expired. Sign in again.");
   if (!uuidSchema.safeParse(id).success) return failure("This material is unavailable.");
+  const admin = createAdminClient();
+  if (!admin) return failure("Deletion is temporarily unavailable. Please try again later.");
 
   const { data: material, error: readError } = await context.supabase
     .from("materials")
@@ -149,10 +154,10 @@ export async function deleteMaterial(id: string): Promise<ActionResult> {
 
   if (material.object_key) {
     const { error } = await context.supabase.storage.from("materials").remove([material.object_key]);
-    if (error) return failure("Could not remove the private file. Nothing was deleted; please retry.");
+    if (error) return failure("Could not confirm private file cleanup. The material record was kept; retry to finish cleanup.");
   }
 
-  const { error } = await context.supabase
+  const { error } = await admin
     .from("materials")
     .delete()
     .eq("id", id)
