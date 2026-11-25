@@ -91,3 +91,13 @@ Supabase Auth + Postgres (RLS) + private Storage
 - [Vercel Functions](https://vercel.com/docs/functions)：为服务端 API 和外部服务调用提供函数运行环境。
 - [Starbase](https://github.com/verycracked/starbase)：交互式 3D 代码星云、力导向布局、节点聚焦与邻接连线参考。
 - [Atomic Globe](https://www.framer.com/marketplace/components/atomic-globe/)：WebGL 粒子聚合、拖拽旋转、光标反馈与性能适配参考。
+
+## 9. CP2 本地配置与验收
+
+1. `.env.local` 只需 `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`、`NEXT_PUBLIC_SITE_URL`。本地开发时 site URL 为 `http://localhost:3000`；不要添加或提交 service role key。
+2. 在目标 Supabase 开发项目的 SQL Editor 完整执行 `supabase/migrations/20261124220000_cp2_identity_and_materials.sql`。迁移会创建 profiles/experiences/materials、RLS、注册 profile trigger，以及 private `materials` bucket 和 Storage policies。先在开发项目验证，再审核后应用到其他环境。
+3. Supabase Dashboard → Authentication → URL Configuration：Site URL 设置为当前应用 origin；Redirect URLs 加入 `http://localhost:3000/auth/confirm?next=/` 和 `http://localhost:3000/auth/confirm?next=/reset-password`。部署环境使用对应 HTTPS origin 添加同样两个路径。默认邮件模板可继续使用；`/auth/confirm` 同时处理 code 与 token_hash 确认。
+4. 上传限制为每个文件 4 MB，每批最多 5 个；允许 PNG/JPG/WebP/GIF、PDF、TXT/MD/CSV、DOC/DOCX。链接仅保存文本，不抓取；CP2 不调用 AI。
+5. 运行 `npm run dev`。手动验收：注册/确认邮箱/登录 → 创建并重命名 star → 添加 note 和链接 → 上传及下载文件 → 刷新确认数据仍在 → 删除素材和 star → 修改 profile → 登出 → 请求密码重置并设置新密码。
+6. 双账户自动隔离验收：准备两个已确认、可登录的测试账户，只在 `.env.local` 添加 `CP2_TEST_USER_A_EMAIL`、`CP2_TEST_USER_A_PASSWORD`、`CP2_TEST_USER_B_EMAIL`、`CP2_TEST_USER_B_PASSWORD`，再运行 `npm run test:isolation`。脚本创建合成数据，验证双向数据库与 Storage 隔离、匿名文件拒绝，最后清理；不会打印凭证、素材或文件内容。
+7. 提交前运行 `npm run lint`、`npm run typecheck`、`npm run build`。真实迁移与双账户结果必须单独记录，不能以 build 成功代替安全验收。

@@ -287,6 +287,98 @@
   .creationDock { left: 43%; }
 }
 
+.workspaceError {
+  position: absolute;
+  z-index: 35;
+  top: 82px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 520px;
+  padding: 10px 13px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(253, 164, 175, 0.24);
+  border-radius: 10px;
+  background: rgba(42, 17, 33, 0.88);
+  color: #fecdd3;
+  font-size: 10px;
+  line-height: 1.5;
+  backdrop-filter: blur(16px);
+}
+
+.workspaceError button {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fda4af;
+  font-size: 9px;
+}
+
+.routeState {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 480px;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+.routeState h1 {
+  margin: 18px 0 0;
+  color: #e9eaff;
+  font-family: var(--font-serif);
+  font-size: 38px;
+  font-style: italic;
+  font-weight: 400;
+}
+
+.routeState > p:not(.eyebrow) {
+  margin: 14px 0 24px;
+  color: #9099bb;
+  font-size: 12px;
+}
+
+.loadingOrbit {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 30px;
+  transform: rotate(-16deg);
+  border: 1px solid rgba(139, 131, 255, 0.35);
+  border-radius: 50%;
+  animation: loadingOrbit 1.8s ease-in-out infinite;
+}
+
+.loadingOrbit::before {
+  content: "";
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #7670c7;
+  box-shadow: 0 0 18px rgba(139, 131, 255, 0.55);
+}
+
+.loadingOrbit i {
+  position: absolute;
+  top: 0;
+  right: 7px;
+  width: 5px;
+  height: 5px;
+  transform: rotate(45deg);
+  background: #b7b2ff;
+}
+
+@keyframes loadingOrbit {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .emptyState,
   .emptyStateHidden,
@@ -302,4 +394,7 @@
   .emptyState,
   .creationDock { transform: translateX(-50%); }
   .emptyStateHidden { transform: translateX(-50%); }
+  .workspaceError { transform: translateX(-50%); }
+  .routeState { transform: translate(-50%, -50%); }
+  .loadingOrbit { animation: none; }
 }

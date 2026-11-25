@@ -18,7 +18,7 @@ import {
   MATERIAL_META,
   type ExperienceStar,
   type Position,
-  type PreviewMaterial,
+  type StarMaterial,
 } from "@/lib/star-map";
 import styles from "./star-map.module.css";
 
@@ -161,7 +161,7 @@ function MaterialFragment({
   starPosition,
   reducedMotion,
 }: {
-  material: PreviewMaterial;
+  material: StarMaterial;
   index: number;
   starPosition: Position;
   reducedMotion: boolean;
@@ -335,7 +335,7 @@ function Planet({
           onClick={onSelect}
           onKeyDown={(event) => navigateStarLabels(event, star.id)}
           aria-pressed={selected}
-          aria-label={`${star.name || "Untitled star"}, ${star.materials.length} preview ${star.materials.length === 1 ? "fragment" : "fragments"}. Open star.`}
+          aria-label={`${star.name || "Untitled star"}, ${star.materials.length} saved ${star.materials.length === 1 ? "fragment" : "fragments"}. Open star.`}
         >
           <span>{star.name || "Untitled star"}</span>
           <small>{star.materials.length} {star.materials.length === 1 ? "fragment" : "fragments"}</small>

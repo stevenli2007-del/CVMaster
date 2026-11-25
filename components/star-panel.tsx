@@ -3,35 +3,65 @@
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { ArrowIcon, CloseIcon, UploadIcon } from "./icons";
 import {
-  classifyText,
-  createId,
-  kindForFile,
+  MATERIAL_FILE_ACCEPT,
+  MAX_FILES_PER_BATCH,
+  validateFileMetadata,
+} from "@/lib/material-constraints";
+import {
   MATERIAL_META,
   type ExperienceStar,
-  type PreviewMaterial,
   type ScreenOrigin,
 } from "@/lib/star-map";
 import styles from "./star-panel.module.css";
 
 type StarPanelProps = {
   star: ExperienceStar;
-  onRename: (name: string) => void;
-  onAdd: (materials: PreviewMaterial[]) => void;
+  onRename: (name: string) => Promise<void>;
+  onAddText: (value: string, origin: ScreenOrigin) => Promise<unknown>;
+  onAddFile: (file: File, origin: ScreenOrigin) => Promise<unknown>;
+  onDeleteMaterial: (id: string) => Promise<void>;
+  onDeleteStar: () => Promise<void>;
   onClose: () => void;
 };
 
-export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
+type Attempt =
+  | { kind: "text"; value: string; origin: ScreenOrigin }
+  | { kind: "files"; files: File[]; origin: ScreenOrigin };
+
+type PanelStatus = { message: string; error: boolean; retry: boolean };
+
+export function StarPanel({
+  star,
+  onRename,
+  onAddText,
+  onAddFile,
+  onDeleteMaterial,
+  onDeleteStar,
+  onClose,
+}: StarPanelProps) {
   const [draft, setDraft] = useState("");
+  const [nameDraft, setNameDraft] = useState(star.name);
   const [dragging, setDragging] = useState(false);
-  const [status, setStatus] = useState("No AI is running. Nothing leaves this browser tab.");
+  const [submitting, setSubmitting] = useState(false);
+  const [savingName, setSavingName] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmMaterialId, setConfirmMaterialId] = useState<string | null>(null);
+  const [confirmStarDelete, setConfirmStarDelete] = useState(false);
+  const [deletingStar, setDeletingStar] = useState(false);
+  const [status, setStatus] = useState<PanelStatus>({
+    message: "Saved privately. Links are stored as text and never fetched.",
+    error: false,
+    retry: false,
+  });
   const nameInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  const lastAttempt = useRef<Attempt | null>(null);
 
   useEffect(() => {
     nameInputRef.current?.focus();
     nameInputRef.current?.select();
-  }, [star.id]);
+  }, []);
 
   function zoneOrigin(): ScreenOrigin {
     const rect = dropZoneRef.current?.getBoundingClientRect();
@@ -40,35 +70,85 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
       : { x: window.innerWidth - 220, y: window.innerHeight / 2 };
   }
 
-  function addText() {
-    const value = draft.trim();
-    if (!value) return;
-    const kind = classifyText(value);
-    onAdd([{
-      id: createId(),
-      kind,
-      label: value.length > 240 ? `${value.slice(0, 240)}…` : value,
-      detail: kind === "note" ? "Temporary text preview" : "URL text only — never fetched",
-      createdAt: performance.now(),
-      origin: zoneOrigin(),
-    }]);
-    setDraft("");
-    setStatus("Preview fragment added in memory. Nothing was analyzed, uploaded, or saved.");
+  async function saveText(value: string, origin: ScreenOrigin) {
+    setSubmitting(true);
+    setStatus({ message: "Saving to this star…", error: false, retry: false });
+    try {
+      await onAddText(value, origin);
+      setDraft("");
+      lastAttempt.current = null;
+      setStatus({ message: "Added to this star and saved.", error: false, retry: false });
+    } catch (error) {
+      setStatus({
+        message: error instanceof Error ? error.message : "Could not save this material. Please retry.",
+        error: true,
+        retry: true,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function addText(value = draft, origin = zoneOrigin()) {
+    const trimmed = value.trim();
+    if (!trimmed || submitting) return;
+    lastAttempt.current = { kind: "text", value: trimmed, origin };
+    void saveText(trimmed, origin);
+  }
+
+  async function saveFiles(files: File[], origin: ScreenOrigin) {
+    setSubmitting(true);
+    let completed = 0;
+    for (let index = 0; index < files.length; index += 1) {
+      setStatus({
+        message: files.length > 1 ? `Uploading file ${index + 1} of ${files.length}…` : "Uploading to private storage…",
+        error: false,
+        retry: false,
+      });
+      try {
+        await onAddFile(files[index], origin);
+        completed += 1;
+      } catch (error) {
+        lastAttempt.current = { kind: "files", files: files.slice(index), origin };
+        setStatus({
+          message: `${completed > 0 ? `${completed} earlier ${completed === 1 ? "file" : "files"} saved. ` : ""}${error instanceof Error ? error.message : "Upload failed. Please retry."}`,
+          error: true,
+          retry: true,
+        });
+        setSubmitting(false);
+        return;
+      }
+    }
+    lastAttempt.current = null;
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setStatus({
+      message: `${completed} ${completed === 1 ? "file" : "files"} uploaded and saved privately.`,
+      error: false,
+      retry: false,
+    });
+    setSubmitting(false);
   }
 
   function addFiles(files: File[], origin: ScreenOrigin) {
-    if (files.length === 0) return;
-    const materials = files.map((file) => ({
-      id: createId(),
-      kind: kindForFile(file.type),
-      label: file.name,
-      detail: file.type || "MIME type not provided",
-      createdAt: performance.now(),
-      origin,
-    }));
-    onAdd(materials);
-    setStatus(`${files.length} file ${files.length === 1 ? "name" : "names"} added as preview metadata. File contents were not read.`);
-    setDraft("");
+    if (files.length === 0 || submitting) return;
+    if (files.length > MAX_FILES_PER_BATCH) {
+      setStatus({ message: `Choose up to ${MAX_FILES_PER_BATCH} files at a time.`, error: true, retry: false });
+      return;
+    }
+    const invalid = files.map(validateFileMetadata).find(Boolean);
+    if (invalid) {
+      setStatus({ message: invalid, error: true, retry: false });
+      return;
+    }
+    lastAttempt.current = { kind: "files", files, origin };
+    void saveFiles(files, origin);
+  }
+
+  function retry() {
+    const attempt = lastAttempt.current;
+    if (!attempt || submitting) return;
+    if (attempt.kind === "text") void saveText(attempt.value, attempt.origin);
+    else void saveFiles(attempt.files, attempt.origin);
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
@@ -81,19 +161,7 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
       return;
     }
     const text = (event.dataTransfer.getData("text/uri-list") || event.dataTransfer.getData("text/plain")).trim();
-    if (text) {
-      setDraft("");
-      const kind = classifyText(text);
-      onAdd([{
-        id: createId(),
-        kind,
-        label: text,
-        detail: kind === "note" ? "Temporary text preview" : "URL text only — never fetched",
-        createdAt: performance.now(),
-        origin,
-      }]);
-      setStatus("Dropped text is a memory-only preview. No URL was fetched.");
-    }
+    if (text) addText(text, origin);
   }
 
   function onTextKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -103,17 +171,73 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
     }
   }
 
+  async function saveName() {
+    const value = nameDraft.trim();
+    if (value === star.name || savingName) return;
+    if (!value) {
+      setNameDraft(star.name);
+      setStatus({ message: "A star name cannot be empty.", error: true, retry: false });
+      return;
+    }
+    setSavingName(true);
+    try {
+      await onRename(value);
+      setNameDraft(value);
+      setStatus({ message: "Star name saved.", error: false, retry: false });
+    } catch (error) {
+      setNameDraft(star.name);
+      setStatus({ message: error instanceof Error ? error.message : "Could not rename this star.", error: true, retry: false });
+    } finally {
+      setSavingName(false);
+    }
+  }
+
+  async function removeMaterial(id: string) {
+    setDeletingId(id);
+    setStatus({ message: "Deleting material and any associated file…", error: false, retry: false });
+    try {
+      await onDeleteMaterial(id);
+      setConfirmMaterialId(null);
+      setStatus({ message: "Material deleted.", error: false, retry: false });
+    } catch (error) {
+      setStatus({ message: error instanceof Error ? error.message : "Could not delete this material. Please retry.", error: true, retry: false });
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  async function removeStar() {
+    setDeletingStar(true);
+    try {
+      await onDeleteStar();
+    } catch (error) {
+      setStatus({ message: error instanceof Error ? error.message : "Could not delete this star. Please retry.", error: true, retry: false });
+      setDeletingStar(false);
+      setConfirmStarDelete(false);
+    }
+  }
+
   return (
-    <aside className={styles.panel} aria-label="Star details">
+    <aside className={styles.panel} aria-label="Star details" aria-busy={submitting || deletingStar}>
       <div className={styles.panelHeader}>
         <div>
           <p className={styles.eyebrow}>EXPERIENCE STAR</p>
           <input
             ref={nameInputRef}
             className={styles.starName}
-            value={star.name}
+            value={nameDraft}
             maxLength={80}
-            onChange={(event) => onRename(event.target.value)}
+            disabled={savingName || deletingStar}
+            onChange={(event) => setNameDraft(event.target.value)}
+            onBlur={() => void saveName()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                setNameDraft(star.name);
+                event.currentTarget.blur();
+              }
+            }}
             aria-label="Star name"
           />
         </div>
@@ -122,9 +246,9 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
         </button>
       </div>
 
-      <div className={styles.previewNotice} role="note">
-        <span className={styles.previewBadge}><i /> Preview only — not saved</span>
-        <p>Closing this panel clears its fragments. Star names last only until refresh.</p>
+      <div className={styles.storageNotice} role="note">
+        <span className={styles.storageBadge}><i /> Saved to your private account</span>
+        <p>Refresh anytime. Your stars and fragments stay here.</p>
       </div>
 
       <div className={styles.panelBody}>
@@ -141,17 +265,19 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
           <div className={styles.dropHeading}>
             <span className={styles.dropIcon}><UploadIcon width={20} height={20} /></span>
             <div>
-              <h2>Drop anything, AI sorts it</h2>
-              <p>Interaction demo only — no AI, upload, or link fetching.</p>
+              <h2>Drop notes, links, and files</h2>
+              <p>Private by default · No AI or link fetching in CP2</p>
             </div>
           </div>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onTextKeyDown}
-            placeholder="Paste a link or type a temporary note…"
-            aria-label="Temporary text or link preview"
+            placeholder="Paste a link or type a note…"
+            aria-label="Text note or link"
             rows={4}
+            maxLength={20000}
+            disabled={submitting || deletingStar}
           />
           <div className={styles.dropActions}>
             <input
@@ -159,25 +285,28 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
               className={styles.fileInput}
               type="file"
               multiple
+              accept={MATERIAL_FILE_ACCEPT}
               tabIndex={-1}
-              aria-label="Choose files for filename-only preview"
+              aria-label="Choose files to upload privately"
               onChange={(event) => {
                 addFiles(Array.from(event.target.files ?? []), zoneOrigin());
-                event.target.value = "";
               }}
             />
-            <button type="button" className={styles.fileButton} onClick={() => fileInputRef.current?.click()}>
+            <button type="button" className={styles.fileButton} disabled={submitting || deletingStar} onClick={() => fileInputRef.current?.click()}>
               Choose files
             </button>
-            <span>Enter to add · Shift + Enter for a new line</span>
-            <button type="button" className={styles.addButton} onClick={addText} disabled={!draft.trim()}>
-              Add preview <ArrowIcon width={15} height={15} />
+            <span>Enter to save · Shift + Enter for a new line · Up to 5 files, 4 MB each</span>
+            <button type="button" className={styles.addButton} onClick={() => addText()} disabled={!draft.trim() || submitting || deletingStar}>
+              {submitting ? "Saving…" : "Save material"}<ArrowIcon width={15} height={15} />
             </button>
           </div>
-          {dragging && <div className={styles.dragOverlay}>Drop for a filename-only preview</div>}
+          {dragging && <div className={styles.dragOverlay}>Drop to save privately</div>}
         </div>
 
-        <p className={styles.status} role="status" aria-live="polite">{status}</p>
+        <div className={styles.statusRow}>
+          <p className={`${styles.status} ${status.error ? styles.statusError : ""}`} role={status.error ? "alert" : "status"} aria-live="polite">{status.message}</p>
+          {status.retry && <button className={styles.retryButton} type="button" disabled={submitting} onClick={retry}>Retry</button>}
+        </div>
 
         <section className={styles.materialsSection} aria-labelledby="materials-heading">
           <div className={styles.materialsHeading}>
@@ -187,12 +316,13 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
           {star.materials.length === 0 ? (
             <div className={styles.materialsEmpty}>
               <span className={styles.emptyOrbit} aria-hidden="true"><i /></span>
-              <p>Your temporary fragments will appear here and in orbit.</p>
+              <p>Your saved notes, links, and files will appear here and in orbit.</p>
             </div>
           ) : (
             <ul className={styles.materialList}>
               {star.materials.map((material) => {
                 const meta = MATERIAL_META[material.kind];
+                const isFile = Boolean(material.originalFilename);
                 return (
                   <li key={material.id} className={styles.materialItem}>
                     <span
@@ -201,9 +331,24 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
                       aria-hidden="true"
                     >{meta.shortLabel}</span>
                     <div>
-                      <div className={styles.materialMeta}>{meta.label}<span>Memory preview</span></div>
+                      <div className={styles.materialMeta}>{meta.label}<span>{material.status === "ready" ? "Ready · saved" : material.status}</span></div>
                       <p>{material.label}</p>
                       <small>{material.detail}</small>
+                      <div className={styles.materialActions}>
+                        {isFile && material.status === "ready" && (
+                          <a href={`/api/materials/${material.id}/download`} download>Download</a>
+                        )}
+                        {confirmMaterialId === material.id ? (
+                          <>
+                            <button type="button" className={styles.confirmDelete} disabled={deletingId === material.id} onClick={() => void removeMaterial(material.id)}>
+                              {deletingId === material.id ? "Deleting…" : "Confirm delete"}
+                            </button>
+                            <button type="button" disabled={deletingId === material.id} onClick={() => setConfirmMaterialId(null)}>Cancel</button>
+                          </>
+                        ) : (
+                          <button type="button" disabled={Boolean(deletingId)} onClick={() => setConfirmMaterialId(material.id)}>Delete</button>
+                        )}
+                      </div>
                     </div>
                   </li>
                 );
@@ -211,8 +356,24 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
             </ul>
           )}
         </section>
+
+        <section className={styles.dangerZone} aria-label="Delete this star">
+          {confirmStarDelete ? (
+            <>
+              <p>Delete this star, all materials, and private files?</p>
+              <div>
+                <button type="button" className={styles.confirmDelete} disabled={deletingStar} onClick={() => void removeStar()}>
+                  {deletingStar ? "Deleting…" : "Delete permanently"}
+                </button>
+                <button type="button" disabled={deletingStar} onClick={() => setConfirmStarDelete(false)}>Cancel</button>
+              </div>
+            </>
+          ) : (
+            <button type="button" onClick={() => setConfirmStarDelete(true)}>Delete this star</button>
+          )}
+        </section>
       </div>
-      <p className={styles.panelFootnote}>No accounts, storage, network imports, or generated results in CP1.</p>
+      <p className={styles.panelFootnote}>Private Storage · Links are never fetched · PNG, JPG, WebP, GIF, PDF, TXT, MD, CSV, DOC, DOCX</p>
     </aside>
   );
 }

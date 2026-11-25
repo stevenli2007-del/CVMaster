@@ -7,11 +7,17 @@ export type ScreenOrigin = {
   y: number;
 };
 
-export type PreviewMaterial = {
+export type StarMaterial = {
   id: string;
   kind: MaterialKind;
   label: string;
   detail: string;
+  status: "queued" | "processing" | "ready" | "failed";
+  sourceUrl: string | null;
+  textContent: string | null;
+  originalFilename: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
   createdAt: number;
   origin: ScreenOrigin;
 };
@@ -22,7 +28,7 @@ export type ExperienceStar = {
   position: Position;
   hue: number;
   createdAt: number;
-  materials: PreviewMaterial[];
+  materials: StarMaterial[];
 };
 
 export const MATERIAL_META: Record<

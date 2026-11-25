@@ -1,0 +1,131 @@
+.account {
+  position: relative;
+}
+
+.accountButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 190px;
+  padding: 5px 10px 5px 5px;
+  border: 1px solid rgba(160, 175, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(9, 13, 29, 0.48);
+  color: #bdc5df;
+  font-size: 10px;
+  backdrop-filter: blur(12px);
+}
+
+.accountButton > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountButton:hover {
+  border-color: rgba(160, 175, 255, 0.35);
+  color: #f0f1ff;
+}
+
+.avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  background: rgba(139, 131, 255, 0.18);
+  color: #d7d3ff;
+  font-size: 10px;
+}
+
+.popover {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  width: 285px;
+  padding: 20px;
+  border: 1px solid rgba(166, 177, 235, 0.2);
+  border-radius: 16px;
+  background: linear-gradient(150deg, rgba(16, 20, 42, 0.97), rgba(7, 10, 25, 0.98));
+  box-shadow: 0 20px 65px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(24px);
+  animation: accountIn 180ms var(--ease-out) both;
+}
+
+@keyframes accountIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.eyebrow {
+  margin: 0 0 16px;
+  color: #838db2;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+
+.popover label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 13px;
+  color: #9ea7c6;
+  font-size: 9px;
+}
+
+.popover input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid rgba(160, 175, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(3, 5, 15, 0.45);
+  color: #e8ecff;
+  font-size: 11px;
+}
+
+.popover input[readonly] {
+  color: #747d9b;
+}
+
+.message {
+  min-height: 15px;
+  margin: 0 0 9px;
+  color: #9ca8c9;
+  font-size: 9px;
+}
+
+.error {
+  color: #fda4af;
+}
+
+.saveButton,
+.signOutButton {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 10px;
+}
+
+.saveButton {
+  border: 1px solid rgba(155, 150, 255, 0.35);
+  background: rgba(113, 104, 232, 0.25);
+  color: #e2dfff;
+}
+
+.signOutButton {
+  margin-top: 8px;
+  border: 1px solid rgba(160, 175, 255, 0.12);
+  background: transparent;
+  color: #929bb9;
+}
+
+.signOutButton:hover {
+  color: #eef0ff;
+  border-color: rgba(160, 175, 255, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popover { animation: none; }
+}

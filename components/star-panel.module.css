@@ -80,7 +80,7 @@
   color: #f0f1ff;
 }
 
-.previewNotice {
+.storageNotice {
   flex: none;
   margin: 0 24px 16px;
   padding: 12px 13px;
@@ -89,7 +89,7 @@
   background: rgba(252, 211, 77, 0.045);
 }
 
-.previewBadge {
+.storageBadge {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -99,7 +99,7 @@
   letter-spacing: 0.005em;
 }
 
-.previewBadge i {
+.storageBadge i {
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -107,7 +107,7 @@
   box-shadow: 0 0 8px rgba(252, 211, 77, 0.45);
 }
 
-.previewNotice p {
+.storageNotice p {
   margin: 6px 0 0 12px;
   color: #9b9fb7;
   font-size: 10px;
@@ -439,10 +439,110 @@
 
 @media (max-height: 760px) {
   .panelHeader { padding-top: 19px; padding-bottom: 12px; }
-  .previewNotice { margin-bottom: 12px; padding: 9px 11px; }
+  .storageNotice { margin-bottom: 12px; padding: 9px 11px; }
   .dropZone { padding: 13px; }
   .dropZone textarea { min-height: 72px; }
   .dropHeading { margin-bottom: 10px; }
+}
+
+.panelHeader > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.storageNotice {
+  border-color: rgba(134, 239, 172, 0.18);
+  background: rgba(134, 239, 172, 0.04);
+}
+
+.storageBadge {
+  color: #a9e8bd;
+}
+
+.storageBadge i {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px rgba(134, 239, 172, 0.4);
+}
+
+.statusRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.statusRow .status {
+  flex: 1;
+}
+
+.statusError {
+  color: #fda4af;
+}
+
+.retryButton {
+  flex: none;
+  margin-top: 8px;
+  padding: 4px 8px;
+  border: 1px solid rgba(253, 164, 175, 0.3);
+  border-radius: 6px;
+  background: rgba(253, 164, 175, 0.06);
+  color: #fecdd3;
+  font-size: 9px;
+}
+
+.materialActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.materialActions a,
+.materialActions button,
+.dangerZone button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8994ba;
+  font-size: 8px;
+  text-decoration: none;
+}
+
+.materialActions a:hover,
+.materialActions button:hover:not(:disabled),
+.dangerZone button:hover:not(:disabled) {
+  color: #e8ecff;
+}
+
+.materialActions button:disabled,
+.dangerZone button:disabled {
+  opacity: 0.45;
+}
+
+.materialActions .confirmDelete,
+.dangerZone .confirmDelete {
+  color: #fda4af;
+}
+
+.dangerZone {
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(253, 164, 175, 0.1);
+}
+
+.dangerZone > button {
+  color: #a77f8e;
+}
+
+.dangerZone p {
+  margin: 0 0 10px;
+  color: #c5a5b2;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.dangerZone > div {
+  display: flex;
+  gap: 14px;
 }
 
 @media (prefers-reduced-motion: reduce) {
