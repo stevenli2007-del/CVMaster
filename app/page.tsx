@@ -39,6 +39,14 @@ export default function Home() {
     window.requestAnimationFrame(() => newStarButtonRef.current?.focus());
   }, [selectedId]);
 
+  function resetView() {
+    if (selectedId) closePanel();
+    setResetKey((key) => key + 1);
+    setAnnouncement(selectedId
+      ? "View reset to overview. Panel closed and preview fragments cleared."
+      : "View reset to overview.");
+  }
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && selectedId) {
@@ -118,7 +126,7 @@ export default function Home() {
           <button
             className={styles.resetButton}
             type="button"
-            onClick={() => setResetKey((key) => key + 1)}
+            onClick={resetView}
           >
             <ResetIcon width={15} height={15} />
             Reset view

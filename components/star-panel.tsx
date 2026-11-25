@@ -82,7 +82,7 @@ export function StarPanel({ star, onRename, onAdd, onClose }: StarPanelProps) {
     }
     const text = (event.dataTransfer.getData("text/uri-list") || event.dataTransfer.getData("text/plain")).trim();
     if (text) {
-      setDraft(text);
+      setDraft("");
       const kind = classifyText(text);
       onAdd([{
         id: createId(),
