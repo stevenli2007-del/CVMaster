@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedContext } from "@/lib/supabase/auth";
+import type { Database } from "@/lib/database.types";
 import type { ActionResult, ExperienceDTO, MaterialDTO, ProfileDTO } from "@/lib/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { displayNameSchema, experienceNameSchema, linkSchema, noteSchema, uuidSchema } from "@/lib/validation";
 import { toMaterialDTO } from "@/lib/workspace-data";
 import { snapshotMaterialRevision } from "@/lib/revisions";
@@ -15,10 +17,15 @@ function failure(message: string): { ok: false; error: string } {
 // Deletes a just-created material row (service role) when a post-insert step
 // fails, so a failed create never leaves an orphaned material without a
 // revision. Used only for note/link materials (no private storage object).
-async function rollbackMaterial(userId: string, materialId: string): Promise<void> {
-  const admin = createAdminClient();
-  if (!admin) return;
-  await admin.from("materials").delete().eq("id", materialId).eq("user_id", userId);
+// Returns true only when the delete succeeded (or the row is already gone),
+// so the caller can distinguish a clean rollback from a leftover row.
+async function rollbackMaterial(
+  admin: SupabaseClient<Database>,
+  userId: string,
+  materialId: string,
+): Promise<boolean> {
+  const { error } = await admin.from("materials").delete().eq("id", materialId).eq("user_id", userId);
+  return !error;
 }
 
 export async function updateProfile(displayName: string): Promise<ActionResult<ProfileDTO>> {
@@ -129,6 +136,13 @@ export async function createTextMaterial(experienceId: string, value: string): P
   const isLink = link?.success === true;
   const hostname = isLink ? new URL(link.data).hostname.toLowerCase() : "";
   const type = isLink ? (hostname === "github.com" || hostname === "www.github.com" ? "github" : "web") : "note";
+
+  // The revision snapshot runs on the service role. Fail before inserting if the
+  // admin client is unavailable, so we never leave a material without a
+  // revision/job that the authenticated client (no DELETE grant) cannot clean.
+  const admin = createAdminClient();
+  if (!admin) return failure("This material could not be prepared. Please try again later.");
+
   // Only the note/link source-capture allowlist columns are written here.
   // processing_status falls back to its DB default ('ready'); object_key, file
   // metadata, content_hash, and current_revision_id are server-managed and are
@@ -148,16 +162,17 @@ export async function createTextMaterial(experienceId: string, value: string): P
 
   // Immutable revision snapshot + first parse/fetch job enqueue. A failed
   // snapshot would leave a material with no revision or processing job, so it
-  // is treated as a failed create and the just-inserted row is rolled back —
-  // the client sees an error and can retry cleanly.
-  const admin = createAdminClient();
-  if (!admin) {
-    await rollbackMaterial(context.userId, data.id);
-    return failure("This material could not be fully prepared. Please try again.");
-  }
+  // is treated as a failed create and the just-inserted row is rolled back.
+  // When the rollback delete fails, we surface that the row may remain rather
+  // than pretend the create failed cleanly.
   const snapshot = await snapshotMaterialRevision(admin, data);
   if (snapshot.ok === false && "error" in snapshot && snapshot.error === "store_failure") {
-    await rollbackMaterial(context.userId, data.id);
+    const rolledBack = await rollbackMaterial(admin, context.userId, data.id);
+    if (!rolledBack) {
+      return failure(
+        "This material was saved, but its processing could not be prepared and cleanup failed. Please delete it and try again.",
+      );
+    }
     return failure("This material could not be fully prepared. Please try again.");
   }
 

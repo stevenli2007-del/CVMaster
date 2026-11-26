@@ -138,11 +138,31 @@ export async function POST(request: Request) {
   // so it is rolled back and surfaced to the client. skipped (type outside the
   // parsing matrix) and not_found (material deleted mid-flight) are not errors.
   if (snapshot.ok === false && "error" in snapshot && snapshot.error === "store_failure") {
-    // Roll back: remove the private object and the just-inserted material row
-    // so a failed snapshot is never silently persisted.
+    // Roll back: remove the private object, then the just-inserted material
+    // row. The response is honest about which part of the rollback failed so
+    // the client is never told "not saved" while a record or file remains.
     const rollbackCleanupError = (await admin.storage.from("materials").remove([objectKey])).error;
-    if (!rollbackCleanupError) {
-      await admin.from("materials").delete().eq("id", materialId).eq("user_id", context.userId);
+    if (rollbackCleanupError) {
+      // Storage cleanup failed: both the material row and the private object
+      // remain, with no revision or job. Tell the client cleanup did not
+      // complete and that it should retry or remove the material manually.
+      return NextResponse.json(
+        { error: "Upload failed, and cleanup could not be completed. An incomplete material record may remain; please retry or delete it." },
+        { status: 502 },
+      );
+    }
+    const { error: deleteError } = await admin
+      .from("materials")
+      .delete()
+      .eq("id", materialId)
+      .eq("user_id", context.userId);
+    if (deleteError) {
+      // The private object was removed, but the material row could not be
+      // deleted. A row without a revision/job remains; surface it accurately.
+      return NextResponse.json(
+        { error: "Upload failed, and the material record could not be removed. The file was deleted; please retry to clear the record." },
+        { status: 502 },
+      );
     }
     return NextResponse.json(
       { error: "Upload failed while preparing the material. Your file was not saved; please retry." },
