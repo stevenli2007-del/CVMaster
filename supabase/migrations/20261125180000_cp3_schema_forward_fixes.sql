@@ -15,12 +15,15 @@
 --
 -- What this slice adds (mapping to the six approved forward-convergence items):
 --   (2) material_segments: unique (revision_id, sequence) + sequence > 0.
---   (3) AI claim evidence integrity across insert/update/delete of
---       claim_evidence: a deferred constraint trigger checks the claim whose
---       evidence set shrank (on DELETE, or on UPDATE when claim_id moves), and
---       rejects committing a surviving AI claim with zero evidence. Cascaded
---       deletes remove the claim in the same transaction, so the invariant is
---       vacuous by commit time and is not blocked.
+--   (3) AI claim evidence integrity closed on both sides: (a) the claim-side
+--       guard (assert_ai_claim_has_evidence) is upgraded via CREATE OR REPLACE
+--       so an AI claim must carry at least one evidence matching its current
+--       run_id (covering run_id updates); (b)/(c) a deferred trigger
+--       (assert_evidence_removal_preserves_ai_claim) rejects DELETE of the last
+--       evidence or an UPDATE that moves evidence to another claim, stranding
+--       the old AI claim; it holds a row lock on the claim to serialize
+--       concurrent removals. Cascades (which remove the claim in the same
+--       transaction) are not blocked.
 --   (4) processing_jobs/deletion_jobs polymorphic target_id: no SQL — enforced
 --       by the server-only transactional write path (documented, not added).
 --   (5) claim_revisions.actor must equal the claim's owner.
@@ -210,30 +213,81 @@ deferrable initially deferred
 for each row execute function public.assert_claim_revision_actor();
 
 -- ---------------------------------------------------------------------------
--- (3) Evidence integrity across the claim_evidence mutation paths. The base
--- migration asserted "AI claim has >= 1 evidence" only on claim insert/update,
--- and its consistency trigger (assert_claim_evidence_consistency) only checks
--- the NEW association after an insert/update — it never checks the OLD claim.
--- This leaves two holes this slice closes:
+-- (3) AI claim evidence integrity, closed on both sides of the relation.
 --
---   * DELETE of the last evidence of a surviving AI claim (base gap).
---   * UPDATE that moves an evidence row to a different claim (claim_id change),
---     which can silently strand the OLD claim at zero evidence.
+-- The base migration left three holes:
 --
--- One deferred constraint trigger covers both by examining the claim whose
--- evidence set shrank (OLD.claim_id) at commit time. If that claim is still
--- alive and is an AI claim with zero remaining evidence, the transaction
--- aborts.
+--   (a) claim side: assert_ai_claim_has_evidence only counts evidence rows; it
+--       never verifies that any evidence actually belongs to the claim's
+--       current run. Updating an AI claim's run_id therefore leaves old
+--       evidence pointing at the previous run with no check. The consistency
+--       trigger (assert_claim_evidence_consistency) only fires when an evidence
+--       row is inserted/updated, not when the claim's run_id changes.
+--
+--   (b) evidence side, direct removal: DELETE of the last evidence of a
+--       surviving AI claim was not checked.
+--
+--   (c) evidence side, association move: UPDATE that moves an evidence row to a
+--       different claim (claim_id change) could silently strand the OLD claim
+--       at zero evidence.
+--
+-- This slice closes all three:
+--   * (a) is closed by CREATE OR REPLACE of assert_ai_claim_has_evidence so
+--     that an AI claim must have at least one evidence whose run matches the
+--     claim's current run_id (deferred, so claim-then-evidence insert order
+--     still passes). The existing claims_ai_evidence trigger already fires on
+--     `update of run_id`, so the upgraded function is exercised on that path.
+--   * (b) and (c) are closed by assert_evidence_removal_preserves_ai_claim
+--     below, which examines the claim whose evidence set shrank (OLD.claim_id)
+--     at commit time and holds a row lock to serialize concurrent removals.
 --
 -- Why deferred: a cascaded delete (material/experience -> ... -> claim_evidence
 -- and -> claims) removes the evidence before the claim, but by commit time the
 -- claim is gone too, so the invariant is vacuous and cascades are NOT blocked.
--- A direct delete, or an association move that strands a surviving AI claim, IS
--- rejected. This matches the approved "新增/修改/删除路径上保证每条存活 AI
--- claim 至少一条同 revision、同 run evidence" requirement (design §7 item 3);
--- the same-revision/same-run property for the NEW association is already
--- enforced by the base migration's assert_claim_evidence_consistency trigger.
+-- A direct delete, an association move, or a run_id change that strands a
+-- surviving AI claim IS rejected. This matches the approved "新增/修改/删除路径
+-- 上保证每条存活 AI claim 至少一条同 revision、同 run evidence" requirement
+-- (design §7 item 3); the same-revision property is transitively guaranteed by
+-- assert_claim_evidence_consistency (evidence.run == claim.run and
+-- evidence.segment.revision == run.revision).
 -- ---------------------------------------------------------------------------
+
+-- (a) Upgrade the claim-side guard: an AI claim must carry at least one
+-- evidence that belongs to its current run. Same function name and signature,
+-- so the base migration's claims_ai_evidence trigger keeps firing on it.
+create or replace function public.assert_ai_claim_has_evidence()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.origin = 'ai' then
+    if new.run_id is not null then
+      if not exists (
+        select 1 from public.claim_evidence e
+        where e.claim_id = new.id
+          and e.run_id = new.run_id
+      ) then
+        raise exception 'AI claim must have at least one evidence matching its run';
+      end if;
+    else
+      -- Defensive fallback: an AI claim with a null run is already rejected by
+      -- the origin/run check; keep the quantity-only guard for safety.
+      if not exists (
+        select 1 from public.claim_evidence e
+        where e.claim_id = new.id
+      ) then
+        raise exception 'AI claim must have at least one evidence row';
+      end if;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.assert_ai_claim_has_evidence() from public, anon, authenticated;
+
+-- (b)/(c) Evidence-side guard: serialize and reject removals that strand a
+-- surviving AI claim.
 create or replace function public.assert_evidence_removal_preserves_ai_claim()
 returns trigger
 language plpgsql
@@ -258,9 +312,19 @@ begin
     return old;
   end if;
 
+  -- Lock the affected claim row to serialize concurrent evidence removals
+  -- against the same claim. Without the lock, two transactions each deleting
+  -- one of the claim's two evidence rows can both pass their count check (each
+  -- sees the other's delete as not-yet-committed), leaving the claim with zero
+  -- evidence after both commit. `for update` forces the second to wait until
+  -- the first commits, at which point the second re-reads and sees the first's
+  -- committed delete.
+  --
   -- If the affected claim was itself removed in the same transaction (cascade),
-  -- there is no surviving claim to protect; the check is skipped.
-  select origin into v_origin from public.claims where id = v_affected;
+  -- the `for update` returns no row (v_origin stays null) and the check is
+  -- skipped — a cascade removes the claim together with its evidence, so there
+  -- is no surviving claim to protect.
+  select origin into v_origin from public.claims where id = v_affected for update;
   if v_origin = 'ai' then
     select count(*) into v_remaining
       from public.claim_evidence
