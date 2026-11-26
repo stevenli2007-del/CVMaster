@@ -6,6 +6,7 @@ import { getAuthenticatedContext } from "@/lib/supabase/auth";
 import type { ActionResult, ExperienceDTO, MaterialDTO, ProfileDTO } from "@/lib/types";
 import { displayNameSchema, experienceNameSchema, linkSchema, noteSchema, uuidSchema } from "@/lib/validation";
 import { toMaterialDTO } from "@/lib/workspace-data";
+import { snapshotMaterialRevision } from "@/lib/revisions";
 
 function failure(message: string): { ok: false; error: string } {
   return { ok: false, error: message };
@@ -135,6 +136,15 @@ export async function createTextMaterial(experienceId: string, value: string): P
     .select("*")
     .single();
   if (error) return failure("Could not save this material. Check that the star still exists and retry.");
+
+  // Best-effort immutable revision snapshot + first parse/fetch job enqueue.
+  // The material is already saved; a snapshot failure does not fail the create,
+  // and the revision is re-created on a later retry (idempotent RPC).
+  const admin = createAdminClient();
+  if (admin) {
+    await snapshotMaterialRevision(admin, data);
+  }
+
   revalidatePath("/");
   return { ok: true, data: toMaterialDTO(data) };
 }

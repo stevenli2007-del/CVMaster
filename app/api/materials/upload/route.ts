@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedContext } from "@/lib/supabase/auth";
 import { uuidSchema } from "@/lib/validation";
 import { toMaterialDTO } from "@/lib/workspace-data";
+import { snapshotMaterialRevision } from "@/lib/revisions";
 
 export const runtime = "nodejs";
 
@@ -121,6 +122,10 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ error: "The file could not be registered. Upload was rolled back; please retry." }, { status: 502 });
   }
+
+  // Best-effort immutable revision snapshot + first parse job enqueue. The
+  // material is already saved; a snapshot failure does not fail the upload.
+  await snapshotMaterialRevision(admin, data);
 
   return NextResponse.json({ material: toMaterialDTO(data) }, {
     status: 201,
