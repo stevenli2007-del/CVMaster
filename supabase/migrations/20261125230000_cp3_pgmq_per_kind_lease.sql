@@ -11,8 +11,9 @@
 -- This migration:
 --   * creates a durable queue per parse kind (fetch_web, parse_file,
 --     normalize_note) and re-homes any pending messages from the old single
---     "processing_jobs" queue into the matching kind queue before dropping it,
---     so no queued job loses its message.
+--     "processing_jobs" queue into the matching kind queue before dropping it
+--     (draining in bounded batches until the queue is empty), so no queued job
+--     loses its message.
 --   * reworks create_material_revision to enqueue into the kind's own queue.
 --   * reworks lease_processing_job to pull from pgmq first: the message's job
 --     UUID is the only thing that decides which job is leased, so message and
@@ -59,21 +60,31 @@ declare
   v_kind text;
 begin
   if exists (select 1 from pg_tables where schemaname = 'pgmq' and tablename = 'q_processing_jobs') then
-    -- pgmq.read with vt=1 and a large qty drains the queue; archived messages
-    -- are not read, so this only touches live messages.
-    for v_msg in select * from pgmq.read('processing_jobs', 1, 1000) loop
-      select kind into v_kind
-        from public.processing_jobs
-       where id = (v_msg.message ->> 'job_id')::uuid
-       limit 1;
+    -- Drain the old queue in bounded batches and keep going until it is empty.
+    -- A single pgmq.read caps at one batch, so looping on a fixed batch size
+    -- guarantees no message is left behind before the queue is dropped.
+    loop
+      exit when not exists (
+        select 1 from pgmq.q_processing_jobs where archived_at is null
+      );
 
-      -- Re-send only messages whose job is a supported parse kind and is still
-      -- queued; anything else is dead weight and can be archived away.
-      if v_kind in ('fetch_web', 'parse_file', 'normalize_note') then
-        perform pgmq.send(v_kind, v_msg.message);
-      end if;
+      -- pgmq.read with vt=1 marks live messages invisible for 1s, so archived
+      -- messages are never re-read. Process one batch, archive each drained
+      -- message, then loop for the next batch.
+      for v_msg in select * from pgmq.read('processing_jobs', 1, 1000) loop
+        select kind into v_kind
+          from public.processing_jobs
+         where id = (v_msg.message ->> 'job_id')::uuid
+         limit 1;
 
-      perform pgmq.archive('processing_jobs', v_msg.msg_id);
+        -- Re-send only messages whose job is a supported parse kind and is still
+        -- queued; anything else is dead weight and can be archived away.
+        if v_kind in ('fetch_web', 'parse_file', 'normalize_note') then
+          perform pgmq.send(v_kind, v_msg.message);
+        end if;
+
+        perform pgmq.archive('processing_jobs', v_msg.msg_id);
+      end loop;
     end loop;
 
     perform pgmq.drop_queue('processing_jobs');
