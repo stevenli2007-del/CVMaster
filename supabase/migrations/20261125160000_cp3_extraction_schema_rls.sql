@@ -258,6 +258,14 @@ begin
   alter table public.extraction_consents drop constraint if exists extraction_consents_credential_owner_fkey;
   alter table public.extraction_runs drop constraint if exists extraction_runs_credential_owner_fkey;
 
+  -- The single-column SET NULL FKs were already introduced under their current
+  -- names in 370faef, so drop those too before the unconditional re-add below.
+  -- This makes the migration converge whether the project is at d51b89e/39aa5a0
+  -- (old composite names), 370faef (current single-column names), or clean.
+  alter table public.materials drop constraint if exists materials_current_revision_fkey;
+  alter table public.extraction_consents drop constraint if exists extraction_consents_credential_fkey;
+  alter table public.extraction_runs drop constraint if exists extraction_runs_credential_fkey;
+
   -- claims.run_id switched from SET NULL to CASCADE: same name, new action.
   alter table public.claims drop constraint if exists claims_run_owner_fkey;
 
