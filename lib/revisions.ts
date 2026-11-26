@@ -20,6 +20,11 @@ type MaterialSnapshot = {
   text_content: string | null;
   mime_type: string | null;
   size_bytes: number | null;
+  // For file/image materials: the SHA-256 hex digest of the actual file bytes.
+  // Computed by the upload path from the file content (not from object_key or
+  // metadata), so content_hash is a genuine content digest that can be used to
+  // verify or identify the file.
+  file_content_hash?: string | null;
 };
 
 export type RevisionSnapshotResult =
@@ -35,8 +40,9 @@ function sha256Hex(input: string): string {
 
 // Immutable source hash per material type (design §5 step 2). Notes hash the
 // text; web/GitHub hash the source URL only (fetch is a worker concern); files
-// hash the private object key + size + mime. The hash is what binds evidence to
-// this exact source version, never a mutable material field.
+// hash the actual file bytes via file_content_hash (computed by the upload
+// path, not from object_key/metadata). The hash is what binds evidence to this
+// exact source version, never a mutable material field.
 function contentHashFor(material: MaterialSnapshot): string | null {
   switch (material.type) {
     case "note":
@@ -48,10 +54,10 @@ function contentHashFor(material: MaterialSnapshot): string | null {
       return sha256Hex(material.source_url);
     case "file":
     case "image":
-      if (!material.object_key) return null;
-      return sha256Hex(
-        `${material.object_key}:${material.size_bytes ?? ""}:${material.mime_type ?? ""}`,
-      );
+      // The file content digest is mandatory: without the real byte hash the
+      // snapshot cannot verify or identify the file, so skip (caller should
+      // have supplied it from the upload body).
+      return material.file_content_hash ?? null;
     default:
       // voice and any future type are outside the first parsing matrix (ADR-003).
       return null;

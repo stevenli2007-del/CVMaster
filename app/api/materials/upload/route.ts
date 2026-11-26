@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { MAX_FILE_SIZE, resolveFileMime, validateFileMetadata } from "@/lib/material-constraints";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -123,9 +124,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "The file could not be registered. Upload was rolled back; please retry." }, { status: 502 });
   }
 
-  // Best-effort immutable revision snapshot + first parse job enqueue. The
-  // material is already saved; a snapshot failure does not fail the upload.
-  await snapshotMaterialRevision(admin, data);
+  // Immutable revision snapshot + first parse job enqueue. The content hash is
+  // the digest of the actual file bytes, so a failed snapshot leaves a material
+  // with no verifiable content digest — that is treated as a failed upload and
+  // rolled back (record + private object) so the client can retry cleanly.
+  const fileContentHash = createHash("sha256")
+    .update(Buffer.from(await file.arrayBuffer()))
+    .digest("hex");
+
+  const snapshot = await snapshotMaterialRevision(admin, { ...data, file_content_hash: fileContentHash });
+
+  // A store_failure (RPC call failed) leaves a material without a revision/job,
+  // so it is rolled back and surfaced to the client. skipped (type outside the
+  // parsing matrix) and not_found (material deleted mid-flight) are not errors.
+  if (snapshot.ok === false && "error" in snapshot && snapshot.error === "store_failure") {
+    // Roll back: remove the private object and the just-inserted material row
+    // so a failed snapshot is never silently persisted.
+    const rollbackCleanupError = (await admin.storage.from("materials").remove([objectKey])).error;
+    if (!rollbackCleanupError) {
+      await admin.from("materials").delete().eq("id", materialId).eq("user_id", context.userId);
+    }
+    return NextResponse.json(
+      { error: "Upload failed while preparing the material. Your file was not saved; please retry." },
+      { status: 502 },
+    );
+  }
 
   return NextResponse.json({ material: toMaterialDTO(data) }, {
     status: 201,

@@ -12,6 +12,15 @@ function failure(message: string): { ok: false; error: string } {
   return { ok: false, error: message };
 }
 
+// Deletes a just-created material row (service role) when a post-insert step
+// fails, so a failed create never leaves an orphaned material without a
+// revision. Used only for note/link materials (no private storage object).
+async function rollbackMaterial(userId: string, materialId: string): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+  await admin.from("materials").delete().eq("id", materialId).eq("user_id", userId);
+}
+
 export async function updateProfile(displayName: string): Promise<ActionResult<ProfileDTO>> {
   const parsed = displayNameSchema.safeParse(displayName);
   const context = await getAuthenticatedContext();
@@ -137,12 +146,19 @@ export async function createTextMaterial(experienceId: string, value: string): P
     .single();
   if (error) return failure("Could not save this material. Check that the star still exists and retry.");
 
-  // Best-effort immutable revision snapshot + first parse/fetch job enqueue.
-  // The material is already saved; a snapshot failure does not fail the create,
-  // and the revision is re-created on a later retry (idempotent RPC).
+  // Immutable revision snapshot + first parse/fetch job enqueue. A failed
+  // snapshot would leave a material with no revision or processing job, so it
+  // is treated as a failed create and the just-inserted row is rolled back —
+  // the client sees an error and can retry cleanly.
   const admin = createAdminClient();
-  if (admin) {
-    await snapshotMaterialRevision(admin, data);
+  if (!admin) {
+    await rollbackMaterial(context.userId, data.id);
+    return failure("This material could not be fully prepared. Please try again.");
+  }
+  const snapshot = await snapshotMaterialRevision(admin, data);
+  if (snapshot.ok === false && "error" in snapshot && snapshot.error === "store_failure") {
+    await rollbackMaterial(context.userId, data.id);
+    return failure("This material could not be fully prepared. Please try again.");
   }
 
   revalidatePath("/");
