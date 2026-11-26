@@ -10,14 +10,17 @@
 --
 -- This migration:
 --   * creates a durable queue per parse kind (fetch_web, parse_file,
---     normalize_note) and drops the old single "processing_jobs" queue (never
---     consumed by a worker yet — dev only).
+--     normalize_note) and re-homes any pending messages from the old single
+--     "processing_jobs" queue into the matching kind queue before dropping it,
+--     so no queued job loses its message.
 --   * reworks create_material_revision to enqueue into the kind's own queue.
 --   * reworks lease_processing_job to pull from pgmq first: the message's job
 --     UUID is the only thing that decides which job is leased, so message and
 --     job stay one-to-one.
 --   * adds a message-id to complete/fail so the worker archives the message it
---     consumed (pgmq.archive — kept for the 7-day queue archive retention).
+--     consumed (pgmq.archive — kept for the 7-day queue archive retention),
+--     with the archive made best-effort so an archive error never rolls back
+--     the job's completion/failure.
 --   * whitelists fail_processing_job's error_code to fixed safe classifications.
 --
 -- Depends on 20261125210000 (pgmq enqueue) and 20261125220000 (lease contract).
@@ -42,12 +45,37 @@ begin
 end;
 $$;
 
--- Drop the superseded single mixed queue. It was never consumed (no worker has
--- run), so there is nothing to migrate; it would otherwise just accumulate
--- messages that no per-kind worker could pull.
+-- Re-home any pending messages from the superseded single mixed queue before
+-- dropping it. The previous slice (20261125210000) enqueued job-UUID messages
+-- into 'processing_jobs'; "no worker has run" does NOT mean the queue is empty.
+-- Each surviving message carries a job UUID whose processing_jobs row may still
+-- be 'queued'. If we dropped the queue outright, those jobs would lose their
+-- message and stay stuck in 'queued' forever. So: read every message, look up
+-- its job's kind, and re-send the message to that kind's own queue; only then
+-- drop the old queue.
 do $$
+declare
+  v_msg record;
+  v_kind text;
 begin
   if exists (select 1 from pg_tables where schemaname = 'pgmq' and tablename = 'q_processing_jobs') then
+    -- pgmq.read with vt=1 and a large qty drains the queue; archived messages
+    -- are not read, so this only touches live messages.
+    for v_msg in select * from pgmq.read('processing_jobs', 1, 1000) loop
+      select kind into v_kind
+        from public.processing_jobs
+       where id = (v_msg.message ->> 'job_id')::uuid
+       limit 1;
+
+      -- Re-send only messages whose job is a supported parse kind and is still
+      -- queued; anything else is dead weight and can be archived away.
+      if v_kind in ('fetch_web', 'parse_file', 'normalize_note') then
+        perform pgmq.send(v_kind, v_msg.message);
+      end if;
+
+      perform pgmq.archive('processing_jobs', v_msg.msg_id);
+    end loop;
+
     perform pgmq.drop_queue('processing_jobs');
   end if;
 end;
@@ -282,7 +310,15 @@ begin
 
   get diagnostics v_updated = row_count;
   if v_updated > 0 then
-    perform pgmq.archive(p_kind, p_msg_id);
+    -- Best-effort archive: an already-archived or missing message must not roll
+    -- back the job completion, so swallow archive errors. The janitor reconciles
+    -- any message that slips through.
+    begin
+      perform pgmq.archive(p_kind, p_msg_id);
+    exception
+      when others then
+        null;
+    end;
     return true;
   end if;
   return false;
@@ -341,7 +377,14 @@ begin
 
   get diagnostics v_updated = row_count;
   if v_updated > 0 then
-    perform pgmq.archive(p_kind, p_msg_id);
+    -- Best-effort archive (see complete_processing_job): an archive failure must
+    -- not roll back the failed status.
+    begin
+      perform pgmq.archive(p_kind, p_msg_id);
+    exception
+      when others then
+        null;
+    end;
     return true;
   end if;
   return false;
