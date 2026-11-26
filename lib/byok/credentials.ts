@@ -42,6 +42,7 @@ export type CredentialError =
   | { kind: "invalid_input"; message: string }
   | { kind: "endpoint"; code: string }
   | { kind: "not_found" }
+  | { kind: "concurrent_update" }
   | { kind: "crypto_unavailable"; message: string }
   | { kind: "store_failure" };
 
@@ -203,15 +204,24 @@ export async function replaceCredential(
     update.rotated_at = new Date().toISOString();
   }
 
+  // Atomic optimistic-lock on provider: the update only succeeds while the
+  // provider still equals the value read at the start of this request. This
+  // closes the read-modify-write race where a concurrent request swaps both
+  // provider and key — writing back a stale provider while the stored
+  // ciphertext (bound to the new provider in its AAD) is preserved would make
+  // the credential undecryptable. If the row no longer matches, report a
+  // retryable conflict instead of clobbering the concurrent change.
   const { data, error } = await admin
     .from("ai_credentials")
     .update(update)
     .eq("id", credentialId)
     .eq("user_id", userId)
+    .eq("provider", existing.provider)
     .select("id, user_id, provider, label, model, endpoint, protocol, last_four, status, created_at, updated_at")
-    .single();
+    .maybeSingle();
 
-  if (error || !data) return { ok: false, error: { kind: "store_failure" } };
+  if (error) return { ok: false, error: { kind: "store_failure" } };
+  if (!data) return { ok: false, error: { kind: "concurrent_update" } };
   return { ok: true, data: toCredentialDTO(data) };
 }
 

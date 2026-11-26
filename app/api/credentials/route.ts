@@ -25,6 +25,8 @@ function toErrorResponse(error: CredentialError): NextResponse {
       return NextResponse.json({ error: endpointErrorMessage(error.code) }, { status: 400 });
     case "not_found":
       return NextResponse.json({ error: "This credential is unavailable or no longer exists." }, { status: 404 });
+    case "concurrent_update":
+      return NextResponse.json({ error: "This credential was updated by another request. Please review and try again." }, { status: 409 });
     case "crypto_unavailable":
       return NextResponse.json({ error: "Credential encryption is temporarily unavailable. Please try again later." }, { status: 503 });
     case "store_failure":
