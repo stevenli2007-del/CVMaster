@@ -112,8 +112,21 @@ create table if not exists public.extraction_consents (
   prompt_version text not null,
   schema_version text not null,
   payload_hash text not null,
-  segment_ids uuid[] not null default '{}'::uuid[],
   created_at timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------------
+-- extraction_consent_segments — the segment scope of a consent, as a proper
+-- relation instead of a uuid[] column. The redundant revision_id column lets a
+-- composite foreign key assert that each selected segment actually belongs to
+-- the consent's revision (and the same owner) at the database level.
+-- ---------------------------------------------------------------------------
+create table if not exists public.extraction_consent_segments (
+  consent_id uuid not null,
+  segment_id uuid not null,
+  revision_id uuid not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  primary key (consent_id, segment_id)
 );
 
 -- ---------------------------------------------------------------------------
@@ -261,11 +274,31 @@ begin
 
   if not exists (
     select 1 from pg_constraint
+    where conrelid = 'public.material_segments'::regclass
+      and conname = 'material_segments_id_revision_user_key'
+  ) then
+    alter table public.material_segments
+      add constraint material_segments_id_revision_user_key
+      unique (id, revision_id, user_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
     where conrelid = 'public.extraction_consents'::regclass
       and conname = 'extraction_consents_id_user_id_key'
   ) then
     alter table public.extraction_consents
       add constraint extraction_consents_id_user_id_key unique (id, user_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.extraction_consents'::regclass
+      and conname = 'extraction_consents_id_revision_user_key'
+  ) then
+    alter table public.extraction_consents
+      add constraint extraction_consents_id_revision_user_key
+      unique (id, material_revision_id, user_id);
   end if;
 
   if not exists (
@@ -309,16 +342,20 @@ begin
       unique (material_id, revision_no);
   end if;
 
-  -- materials.current_revision_id -> material_revisions, same owner
+  -- materials.current_revision_id -> material_revisions. Single-column FK with
+  -- ON DELETE SET NULL: only the pointer is nulled, not the NOT NULL user_id
+  -- (a composite FK with SET NULL would try to null user_id and fail). Owner
+  -- and same-material consistency are asserted by a deferred constraint trigger
+  -- below (assert_revision_owner).
   if not exists (
     select 1 from pg_constraint
     where conrelid = 'public.materials'::regclass
-      and conname = 'materials_current_revision_owner_fkey'
+      and conname = 'materials_current_revision_fkey'
   ) then
     alter table public.materials
-      add constraint materials_current_revision_owner_fkey
-      foreign key (current_revision_id, user_id)
-      references public.material_revisions(id, user_id) on delete set null;
+      add constraint materials_current_revision_fkey
+      foreign key (current_revision_id)
+      references public.material_revisions(id) on delete set null;
   end if;
 
   -- material_segments -> material_revisions, same owner
@@ -345,16 +382,18 @@ begin
       references public.material_revisions(id, user_id) on delete cascade;
   end if;
 
-  -- extraction_consents -> ai_credentials, same owner (credential may be null)
+  -- extraction_consents -> ai_credentials. Single-column FK + SET NULL so the
+  -- consent (audit record) survives credential deletion while only credential_id
+  -- is nulled. Owner consistency is asserted by assert_credential_owner below.
   if not exists (
     select 1 from pg_constraint
     where conrelid = 'public.extraction_consents'::regclass
-      and conname = 'extraction_consents_credential_owner_fkey'
+      and conname = 'extraction_consents_credential_fkey'
   ) then
     alter table public.extraction_consents
-      add constraint extraction_consents_credential_owner_fkey
-      foreign key (credential_id, user_id)
-      references public.ai_credentials(id, user_id) on delete set null;
+      add constraint extraction_consents_credential_fkey
+      foreign key (credential_id)
+      references public.ai_credentials(id) on delete set null;
   end if;
 
   -- extraction_runs -> extraction_consents, same owner
@@ -369,16 +408,17 @@ begin
       references public.extraction_consents(id, user_id) on delete cascade;
   end if;
 
-  -- extraction_runs -> ai_credentials, same owner (credential may be null)
+  -- extraction_runs -> ai_credentials. Single-column FK + SET NULL (same
+  -- rationale as consent.credential_id above).
   if not exists (
     select 1 from pg_constraint
     where conrelid = 'public.extraction_runs'::regclass
-      and conname = 'extraction_runs_credential_owner_fkey'
+      and conname = 'extraction_runs_credential_fkey'
   ) then
     alter table public.extraction_runs
-      add constraint extraction_runs_credential_owner_fkey
-      foreign key (credential_id, user_id)
-      references public.ai_credentials(id, user_id) on delete set null;
+      add constraint extraction_runs_credential_fkey
+      foreign key (credential_id)
+      references public.ai_credentials(id) on delete set null;
   end if;
 
   -- claims -> experiences, same owner
@@ -393,7 +433,10 @@ begin
       references public.experiences(id, user_id) on delete cascade;
   end if;
 
-  -- claims -> extraction_runs, same owner (run may be null for manual claims)
+  -- claims -> extraction_runs. ON DELETE CASCADE: an AI claim exists only as a
+  -- derivative of its run, so deleting the run (e.g. when its source revision is
+  -- deleted) must remove the claim, not orphan it. Manual claims have run_id
+  -- null and are unaffected (enforced by claims_origin_run_check below).
   if not exists (
     select 1 from pg_constraint
     where conrelid = 'public.claims'::regclass
@@ -402,7 +445,7 @@ begin
     alter table public.claims
       add constraint claims_run_owner_fkey
       foreign key (run_id, user_id)
-      references public.extraction_runs(id, user_id) on delete set null;
+      references public.extraction_runs(id, user_id) on delete cascade;
   end if;
 
   -- claim_revisions -> claims, same owner
@@ -451,6 +494,35 @@ begin
       add constraint claim_evidence_run_owner_fkey
       foreign key (run_id, user_id)
       references public.extraction_runs(id, user_id) on delete cascade;
+  end if;
+
+  -- extraction_consent_segments -> extraction_consents. The redundant
+  -- revision_id column is carried through the composite FK so the selected
+  -- segment is provably within the consent's revision (and same owner).
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.extraction_consent_segments'::regclass
+      and conname = 'extraction_consent_segments_consent_fkey'
+  ) then
+    alter table public.extraction_consent_segments
+      add constraint extraction_consent_segments_consent_fkey
+      foreign key (consent_id, revision_id, user_id)
+      references public.extraction_consents(id, material_revision_id, user_id)
+      on delete cascade;
+  end if;
+
+  -- extraction_consent_segments -> material_segments. Same owner and same
+  -- revision, so the segment belongs to the consent's revision.
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.extraction_consent_segments'::regclass
+      and conname = 'extraction_consent_segments_segment_fkey'
+  ) then
+    alter table public.extraction_consent_segments
+      add constraint extraction_consent_segments_segment_fkey
+      foreign key (segment_id, revision_id, user_id)
+      references public.material_segments(id, revision_id, user_id)
+      on delete cascade;
   end if;
 end;
 $$;
@@ -503,6 +575,14 @@ alter table public.claims
   add constraint claims_manual_origin_state_check
   check (origin = 'ai' or (origin = 'user' and run_id is null));
 
+alter table public.claims drop constraint if exists claims_origin_run_check;
+alter table public.claims
+  add constraint claims_origin_run_check
+  check (
+    (origin = 'user' and run_id is null)
+    or (origin = 'ai' and run_id is not null)
+  );
+
 alter table public.deletion_jobs drop constraint if exists deletion_jobs_target_type_check;
 alter table public.deletion_jobs
   add constraint deletion_jobs_target_type_check
@@ -512,6 +592,117 @@ alter table public.deletion_jobs drop constraint if exists deletion_jobs_status_
 alter table public.deletion_jobs
   add constraint deletion_jobs_status_check
   check (status in ('queued', 'running', 'completed', 'failed'));
+
+-- ---------------------------------------------------------------------------
+-- Deferred constraint triggers: assert owner/derivation consistency for the
+-- single-column "nullable reference" FKs that cannot carry a composite owner
+-- key (a composite FK with ON DELETE SET NULL would null the NOT NULL user_id).
+-- These run at commit time so insert-then-backfill sequences stay valid.
+-- ---------------------------------------------------------------------------
+
+-- materials.current_revision_id must point at a revision of this material and
+-- the same owner.
+create or replace function public.assert_material_revision_owner()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.current_revision_id is not null then
+    if not exists (
+      select 1 from public.material_revisions r
+      where r.id = new.current_revision_id
+        and r.material_id = new.id
+        and r.user_id = new.user_id
+    ) then
+      raise exception 'current_revision_id does not belong to this material or owner';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.assert_material_revision_owner() from public, anon, authenticated;
+
+drop trigger if exists materials_current_revision_owner on public.materials;
+create constraint trigger materials_current_revision_owner
+after insert or update of current_revision_id on public.materials
+deferrable initially deferred
+for each row execute function public.assert_material_revision_owner();
+
+-- credential_id references must stay within the same owner (single-column FK
+-- can only assert existence, not ownership).
+create or replace function public.assert_credential_owner()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.credential_id is not null then
+    if not exists (
+      select 1 from public.ai_credentials c
+      where c.id = new.credential_id
+        and c.user_id = new.user_id
+    ) then
+      raise exception 'credential_id does not belong to this owner';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.assert_credential_owner() from public, anon, authenticated;
+
+drop trigger if exists extraction_consents_credential_owner on public.extraction_consents;
+create constraint trigger extraction_consents_credential_owner
+after insert or update of credential_id on public.extraction_consents
+deferrable initially deferred
+for each row execute function public.assert_credential_owner();
+
+drop trigger if exists extraction_runs_credential_owner on public.extraction_runs;
+create constraint trigger extraction_runs_credential_owner
+after insert or update of credential_id on public.extraction_runs
+deferrable initially deferred
+for each row execute function public.assert_credential_owner();
+
+-- claim_evidence: the claim, its run, and the cited segment must form a
+-- consistent derivation chain — the segment belongs to the run's revision and
+-- the claim was produced by that same run.
+create or replace function public.assert_claim_evidence_consistency()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_segment_revision uuid;
+  v_run_revision uuid;
+  v_claim_run uuid;
+begin
+  select revision_id into v_segment_revision
+    from public.material_segments where id = new.segment_id;
+
+  select c.material_revision_id into v_run_revision
+    from public.extraction_runs r
+    join public.extraction_consents c on c.id = r.consent_id
+    where r.id = new.run_id;
+
+  select run_id into v_claim_run
+    from public.claims where id = new.claim_id;
+
+  if v_segment_revision is distinct from v_run_revision then
+    raise exception 'evidence segment revision does not match run revision';
+  end if;
+  if v_claim_run is distinct from new.run_id then
+    raise exception 'evidence claim was not produced by this run';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.assert_claim_evidence_consistency() from public, anon, authenticated;
+
+drop trigger if exists claim_evidence_consistency on public.claim_evidence;
+create constraint trigger claim_evidence_consistency
+after insert or update on public.claim_evidence
+deferrable initially deferred
+for each row execute function public.assert_claim_evidence_consistency();
 
 -- ---------------------------------------------------------------------------
 -- Indexes: owner + status/time, revision segments, claim evidence, job lease
@@ -525,8 +716,14 @@ create index if not exists material_segments_revision_idx
   on public.material_segments (revision_id, sequence);
 create index if not exists processing_jobs_user_status_idx
   on public.processing_jobs (user_id, status, created_at desc);
-create index if not exists processing_jobs_idempotency_idx
-  on public.processing_jobs (idempotency_key);
+
+-- Idempotency: only one active (queued/running) job per idempotency key and
+-- owner. Completed/failed jobs release the key so a user retry can enqueue a
+-- fresh job with the same key.
+drop index if exists processing_jobs_idempotency_idx;
+create unique index processing_jobs_idempotency_idx
+  on public.processing_jobs (user_id, idempotency_key)
+  where status in ('queued', 'running');
 create index if not exists extraction_consents_user_idx
   on public.extraction_consents (user_id, created_at desc);
 create index if not exists extraction_runs_user_status_idx
@@ -541,6 +738,13 @@ create index if not exists claim_evidence_segment_idx
   on public.claim_evidence (segment_id);
 create index if not exists deletion_jobs_user_status_idx
   on public.deletion_jobs (user_id, status, created_at desc);
+
+-- One active deletion job per target: prevents duplicate/parallel cleanup of
+-- the same material/experience/account/credential.
+drop index if exists deletion_jobs_active_target_idx;
+create unique index deletion_jobs_active_target_idx
+  on public.deletion_jobs (user_id, target_type, target_id)
+  where status in ('queued', 'running');
 
 -- ---------------------------------------------------------------------------
 -- updated_at trigger coverage for tables that carry the column.
@@ -611,6 +815,9 @@ revoke all on table public.deletion_jobs from anon, authenticated;
 revoke all on table public.extraction_consents from anon, authenticated;
 grant select on table public.extraction_consents to authenticated;
 
+revoke all on table public.extraction_consent_segments from anon, authenticated;
+grant select on table public.extraction_consent_segments to authenticated;
+
 revoke all on table public.extraction_runs from anon, authenticated;
 grant select on table public.extraction_runs to authenticated;
 
@@ -630,6 +837,7 @@ alter table public.material_revisions enable row level security;
 alter table public.material_segments enable row level security;
 alter table public.processing_jobs enable row level security;
 alter table public.extraction_consents enable row level security;
+alter table public.extraction_consent_segments enable row level security;
 alter table public.extraction_runs enable row level security;
 alter table public.claims enable row level security;
 alter table public.claim_revisions enable row level security;
@@ -652,6 +860,10 @@ for select to authenticated using ((select auth.uid()) = user_id);
 
 drop policy if exists extraction_consents_select_own on public.extraction_consents;
 create policy extraction_consents_select_own on public.extraction_consents
+for select to authenticated using ((select auth.uid()) = user_id);
+
+drop policy if exists extraction_consent_segments_select_own on public.extraction_consent_segments;
+create policy extraction_consent_segments_select_own on public.extraction_consent_segments
 for select to authenticated using ((select auth.uid()) = user_id);
 
 drop policy if exists extraction_runs_select_own on public.extraction_runs;
@@ -684,16 +896,25 @@ commit;
 --   ... (drop each *_select_own policy above) ...
 --   alter table public.ai_credentials disable row level security;
 --   ... (disable RLS on the other new tables) ...
+--   drop trigger if exists materials_current_revision_owner on public.materials;
+--   drop trigger if exists extraction_consents_credential_owner on public.extraction_consents;
+--   drop trigger if exists extraction_runs_credential_owner on public.extraction_runs;
+--   drop trigger if exists claim_evidence_consistency on public.claim_evidence;
+--   drop function if exists public.assert_material_revision_owner();
+--   drop function if exists public.assert_credential_owner();
+--   drop function if exists public.assert_claim_evidence_consistency();
 --   alter table public.materials drop column if exists current_revision_id;
+--   drop table if exists public.extraction_consent_segments cascade;
 --   drop table if exists public.claim_evidence, public.claim_revisions,
 --     public.claims, public.extraction_runs, public.extraction_consents,
 --     public.processing_jobs, public.material_segments, public.material_revisions,
 --     public.ai_credentials, public.deletion_jobs cascade;
--- This ordering is mandatory: child tables (claim_evidence, claim_revisions,
--- extraction_runs, extraction_consents, material_segments) must drop before
--- their composite-FK parents (claims, material_revisions, ai_credentials),
--- and materials.current_revision_id must drop before material_revisions so the
--- composite FK on (current_revision_id, user_id) does not block the drop.
+-- This ordering is mandatory: drop the deferred constraint triggers and the
+-- extraction_consent_segments relation first (they reference consents/segments),
+-- then child tables (claim_evidence, claim_revisions, extraction_runs,
+-- extraction_consents, material_segments) before their composite-FK parents
+-- (claims, material_revisions, ai_credentials), and materials.current_revision_id
+-- before material_revisions so the single-column FK does not block the drop.
 --
 -- Forward fixes already expected in later slices (do not implement here):
 --   * BYOK save/replace/delete/decrypt as restricted SECURITY DEFINER functions
