@@ -8,6 +8,11 @@
 -- environments. Transactional and rerunnable: rerunning converges constraints,
 -- policies, grants, and indexes without dropping or rewriting user rows.
 --
+-- Upgrade safety: constraints whose shape or ON DELETE action changed across
+-- CP3 review rounds are dropped and re-added (not `if not exists`), so applying
+-- this file over an already-migrated project converges to the new behavior
+-- instead of silently keeping the old constraint under the same name.
+--
 -- Ownership model (unchanged from CP2): every business table carries user_id,
 -- and cross-table references use a composite (id, user_id) foreign key so a row
 -- can only be linked to another row owned by the same account. RLS defaults to
@@ -241,6 +246,24 @@ alter table public.materials
 -- ---------------------------------------------------------------------------
 do $$
 begin
+  -- -------------------------------------------------------------------------
+  -- Upgrade cleanup: drop constraints and columns introduced by earlier CP3
+  -- slices whose shape or name changed. `if not exists` alone cannot replace a
+  -- same-named constraint that carries a different ON DELETE action, so the
+  -- changed FKs are dropped and re-added below to converge on the new behavior.
+  -- -------------------------------------------------------------------------
+
+  -- Old composite-FK names (SET NULL over a NOT NULL user_id) are gone.
+  alter table public.materials drop constraint if exists materials_current_revision_owner_fkey;
+  alter table public.extraction_consents drop constraint if exists extraction_consents_credential_owner_fkey;
+  alter table public.extraction_runs drop constraint if exists extraction_runs_credential_owner_fkey;
+
+  -- claims.run_id switched from SET NULL to CASCADE: same name, new action.
+  alter table public.claims drop constraint if exists claims_run_owner_fkey;
+
+  -- The consent scope moved from a uuid[] column to a relation.
+  alter table public.extraction_consents drop column if exists segment_ids;
+
   -- Composite (id, user_id) unique keys. Every composite owner FK below needs
   -- its referenced table to carry a unique constraint on (id, user_id). CP2
   -- already added these for materials and experiences; the CP3 tables add
@@ -346,17 +369,12 @@ begin
   -- ON DELETE SET NULL: only the pointer is nulled, not the NOT NULL user_id
   -- (a composite FK with SET NULL would try to null user_id and fail). Owner
   -- and same-material consistency are asserted by a deferred constraint trigger
-  -- below (assert_revision_owner).
-  if not exists (
-    select 1 from pg_constraint
-    where conrelid = 'public.materials'::regclass
-      and conname = 'materials_current_revision_fkey'
-  ) then
-    alter table public.materials
-      add constraint materials_current_revision_fkey
-      foreign key (current_revision_id)
-      references public.material_revisions(id) on delete set null;
-  end if;
+  -- below (assert_material_revision_owner). Re-added unconditionally: the old
+  -- name/shape was dropped above.
+  alter table public.materials
+    add constraint materials_current_revision_fkey
+    foreign key (current_revision_id)
+    references public.material_revisions(id) on delete set null;
 
   -- material_segments -> material_revisions, same owner
   if not exists (
@@ -385,16 +403,11 @@ begin
   -- extraction_consents -> ai_credentials. Single-column FK + SET NULL so the
   -- consent (audit record) survives credential deletion while only credential_id
   -- is nulled. Owner consistency is asserted by assert_credential_owner below.
-  if not exists (
-    select 1 from pg_constraint
-    where conrelid = 'public.extraction_consents'::regclass
-      and conname = 'extraction_consents_credential_fkey'
-  ) then
-    alter table public.extraction_consents
-      add constraint extraction_consents_credential_fkey
-      foreign key (credential_id)
-      references public.ai_credentials(id) on delete set null;
-  end if;
+  -- Re-added unconditionally: the old name/shape was dropped above.
+  alter table public.extraction_consents
+    add constraint extraction_consents_credential_fkey
+    foreign key (credential_id)
+    references public.ai_credentials(id) on delete set null;
 
   -- extraction_runs -> extraction_consents, same owner
   if not exists (
@@ -409,17 +422,11 @@ begin
   end if;
 
   -- extraction_runs -> ai_credentials. Single-column FK + SET NULL (same
-  -- rationale as consent.credential_id above).
-  if not exists (
-    select 1 from pg_constraint
-    where conrelid = 'public.extraction_runs'::regclass
-      and conname = 'extraction_runs_credential_fkey'
-  ) then
-    alter table public.extraction_runs
-      add constraint extraction_runs_credential_fkey
-      foreign key (credential_id)
-      references public.ai_credentials(id) on delete set null;
-  end if;
+  -- rationale as consent.credential_id above). Re-added unconditionally.
+  alter table public.extraction_runs
+    add constraint extraction_runs_credential_fkey
+    foreign key (credential_id)
+    references public.ai_credentials(id) on delete set null;
 
   -- claims -> experiences, same owner
   if not exists (
@@ -437,16 +444,11 @@ begin
   -- derivative of its run, so deleting the run (e.g. when its source revision is
   -- deleted) must remove the claim, not orphan it. Manual claims have run_id
   -- null and are unaffected (enforced by claims_origin_run_check below).
-  if not exists (
-    select 1 from pg_constraint
-    where conrelid = 'public.claims'::regclass
-      and conname = 'claims_run_owner_fkey'
-  ) then
-    alter table public.claims
-      add constraint claims_run_owner_fkey
-      foreign key (run_id, user_id)
-      references public.extraction_runs(id, user_id) on delete cascade;
-  end if;
+  -- Re-added unconditionally: the old SET NULL constraint was dropped above.
+  alter table public.claims
+    add constraint claims_run_owner_fkey
+    foreign key (run_id, user_id)
+    references public.extraction_runs(id, user_id) on delete cascade;
 
   -- claim_revisions -> claims, same owner
   if not exists (
@@ -570,10 +572,9 @@ alter table public.claims
   add constraint claims_category_check
   check (category in ('project', 'organization', 'role', 'action', 'technology', 'outcome', 'metric', 'date', 'skill', 'learning', 'other'));
 
+-- The older claims_manual_origin_state_check is superseded by the bidirectional
+-- claims_origin_run_check below; drop the old one so the two do not coexist.
 alter table public.claims drop constraint if exists claims_manual_origin_state_check;
-alter table public.claims
-  add constraint claims_manual_origin_state_check
-  check (origin = 'ai' or (origin = 'user' and run_id is null));
 
 alter table public.claims drop constraint if exists claims_origin_run_check;
 alter table public.claims
@@ -703,6 +704,34 @@ create constraint trigger claim_evidence_consistency
 after insert or update on public.claim_evidence
 deferrable initially deferred
 for each row execute function public.assert_claim_evidence_consistency();
+
+-- An AI claim must be written with at least one evidence in the same
+-- transaction. Deferred to commit so the claim-then-evidence insert order of
+-- the extraction pipeline passes; a zero-evidence AI claim aborts the commit.
+create or replace function public.assert_ai_claim_has_evidence()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.origin = 'ai' then
+    if not exists (
+      select 1 from public.claim_evidence e
+      where e.claim_id = new.id
+    ) then
+      raise exception 'AI claim must have at least one evidence row';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.assert_ai_claim_has_evidence() from public, anon, authenticated;
+
+drop trigger if exists claims_ai_evidence on public.claims;
+create constraint trigger claims_ai_evidence
+after insert or update of origin, run_id on public.claims
+deferrable initially deferred
+for each row execute function public.assert_ai_claim_has_evidence();
 
 -- ---------------------------------------------------------------------------
 -- Indexes: owner + status/time, revision segments, claim evidence, job lease
@@ -900,9 +929,11 @@ commit;
 --   drop trigger if exists extraction_consents_credential_owner on public.extraction_consents;
 --   drop trigger if exists extraction_runs_credential_owner on public.extraction_runs;
 --   drop trigger if exists claim_evidence_consistency on public.claim_evidence;
+--   drop trigger if exists claims_ai_evidence on public.claims;
 --   drop function if exists public.assert_material_revision_owner();
 --   drop function if exists public.assert_credential_owner();
 --   drop function if exists public.assert_claim_evidence_consistency();
+--   drop function if exists public.assert_ai_claim_has_evidence();
 --   alter table public.materials drop column if exists current_revision_id;
 --   drop table if exists public.extraction_consent_segments cascade;
 --   drop table if exists public.claim_evidence, public.claim_revisions,

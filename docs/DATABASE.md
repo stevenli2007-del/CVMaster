@@ -85,6 +85,22 @@ auth.users
 - 私有文件下载使用 owner 检查后签发短时 URL；不开放公开 bucket。
 - `ai_credentials` 的表策略不授权客户端访问密文；凭证操作走限定的服务端函数，并防止批量列出/解密。
 
+### CP3 已落地表（migration 实际 schema）
+
+> 概念模型小节（上方）仍为 CP0 基线，尚未整体同步；CP3 migration `20261125160000_cp3_extraction_schema_rls.sql` 实际创建的表如下，字段以迁移为准。
+
+- `ai_credentials`：owner/provider/label/model/endpoint/protocol/last_four + `ciphertext/nonce/wrapped_dek/wrapped_dek_nonce/kek_version/status`。客户端仅列级读取非敏感配置与 metadata，密文列永不授权给 anon/authenticated。
+- `material_revisions`：`material_id/user_id/revision_no`、`content_hash/parser_version/parse_status/error_code`，不可变来源快照。
+- `material_segments`：`revision_id/user_id/sequence`、`text_content/content_hash/source_locator`，规范化分块与证据锚点。
+- `processing_jobs`：job 类型/状态/幂等键/attempt/lease/安全错误码；对 anon/authenticated 完全关闭。
+- `extraction_consents`：`material_revision_id/credential_id`、provider/model/endpoint/protocol/adapter/prompt/schema 版本、`payload_hash`，证明用户同意发往哪个目标。
+- `extraction_consent_segments`：consent 的 segment scope 关联表（`consent_id/segment_id/revision_id/user_id`）；复合外键贯穿 `revision_id` 保证所选 segment 确属 consent 的 revision。
+- `extraction_runs`：`consent_id/credential_id`、版本/usage/attempts/状态/安全错误码；原始模型输出不落库。
+- `claims`：`origin(ai/user)` 与 `review_state(pending/confirmed/rejected)` 分离；`run_id/experience_id`；AI claim 必须绑定 run 且至少一条 evidence。
+- `claim_revisions`：用户编辑审计，不覆盖 AI 原始提案。
+- `claim_evidence`：claim/segment/run 多对多证据，服务端校验 quote/offsets。
+- `deletion_jobs`：可重放删除 saga 状态；对 anon/authenticated 完全关闭。
+
 ## 4. 索引与生命周期
 
 - 主要索引：每表 `(user_id, created_at desc)`；`materials(experience_id, created_at)`、`claims(experience_id, state)`、`job_requirements(job_application_id)`、`resume_versions(job_application_id, version_number desc)`。
