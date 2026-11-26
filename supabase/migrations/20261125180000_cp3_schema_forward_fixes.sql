@@ -15,18 +15,19 @@
 --
 -- What this slice adds (mapping to the six approved forward-convergence items):
 --   (2) material_segments: unique (revision_id, sequence) + sequence > 0.
---   (3) AI claim evidence integrity on the DELETE path: a deferred constraint
---       trigger rejects deleting the last evidence of a surviving AI claim,
---       while still permitting cascaded deletes (the claim is removed in the
---       same transaction, so the invariant is vacuous by commit time).
+--   (3) AI claim evidence integrity across insert/update/delete of
+--       claim_evidence: a deferred constraint trigger checks the claim whose
+--       evidence set shrank (on DELETE, or on UPDATE when claim_id moves), and
+--       rejects committing a surviving AI claim with zero evidence. Cascaded
+--       deletes remove the claim in the same transaction, so the invariant is
+--       vacuous by commit time and is not blocked.
 --   (4) processing_jobs/deletion_jobs polymorphic target_id: no SQL — enforced
 --       by the server-only transactional write path (documented, not added).
 --   (5) claim_revisions.actor must equal the claim's owner.
---   (6) CHECK constraints: attempts >= 0, version > 0, revision_no > 0,
---       sequence > 0, JSON object shape for source_locator/offsets/usage, and
---       lease token/expiry pairing. content_hash format is intentionally not
---       pinned here — the parser has not defined hex vs base64 yet; the columns
---       are already NOT NULL and a non-empty guard is added conservatively.
+--   (6) CHECK constraints: attempts >= 0, version/revision_no > 0, sequence > 0,
+--       SHA-256 64-hex shape for content_hash, JSON object shape for
+--       source_locator/offsets/usage, non-empty bounded idempotency_key, and
+--       lease token/expiry pairing with running jobs requiring a lease.
 --
 -- Item 1 is intentionally NOT in this file (see header above).
 
@@ -37,12 +38,9 @@ begin;
 -- ---------------------------------------------------------------------------
 
 -- Unique (revision_id, sequence) so a revision can never carry two segments at
--- the same position. Guarded because the base CP3 migration already created
--- the (revision_id, sequence) index (non-unique); we add the unique constraint
--- under a distinct name and drop the now-redundant plain index is unnecessary
--- (a unique constraint backs a unique index). The base migration created
--- `material_segments_revision_idx` (revision_id, sequence) — leave it; the
--- unique constraint coexists and supersedes it for lookups.
+-- the same position. The base CP3 migration already created a non-unique
+-- (revision_id, sequence) index; this unique constraint backs its own unique
+-- index and supersedes it for lookups (the plain index is left in place).
 do $$
 begin
   if not exists (
@@ -64,7 +62,7 @@ alter table public.material_segments
   check (sequence > 0);
 
 -- ---------------------------------------------------------------------------
--- (6) material_revisions: positive revision_no (version > 0 semantics).
+-- (6) material_revisions: positive revision_no.
 -- ---------------------------------------------------------------------------
 alter table public.material_revisions
   drop constraint if exists material_revisions_revision_no_positive_check;
@@ -103,6 +101,30 @@ alter table public.deletion_jobs
   check (attempt >= 0);
 
 -- ---------------------------------------------------------------------------
+-- (6) SHA-256 content_hash: exactly 64 lowercase hex characters. Applies to the
+-- three content_hash columns (material_revisions, material_segments,
+-- claim_evidence). Parser/extraction must emit lowercase hex; the columns are
+-- already NOT NULL, so this only pins the shape.
+-- ---------------------------------------------------------------------------
+alter table public.material_revisions
+  drop constraint if exists material_revisions_content_hash_sha256_check;
+alter table public.material_revisions
+  add constraint material_revisions_content_hash_sha256_check
+  check (content_hash ~ '^[0-9a-f]{64}$');
+
+alter table public.material_segments
+  drop constraint if exists material_segments_content_hash_sha256_check;
+alter table public.material_segments
+  add constraint material_segments_content_hash_sha256_check
+  check (content_hash ~ '^[0-9a-f]{64}$');
+
+alter table public.claim_evidence
+  drop constraint if exists claim_evidence_content_hash_sha256_check;
+alter table public.claim_evidence
+  add constraint claim_evidence_content_hash_sha256_check
+  check (content_hash ~ '^[0-9a-f]{64}$');
+
+-- ---------------------------------------------------------------------------
 -- (6) JSON object shape for the locator/offset/usage columns. These carry
 -- bounded, server-validated structures, never raw provider payloads; the
 -- object shape is asserted so a scalar/array cannot be smuggled in.
@@ -126,7 +148,22 @@ alter table public.extraction_runs
   check (usage is null or jsonb_typeof(usage) = 'object');
 
 -- ---------------------------------------------------------------------------
--- (6) lease token/expiry pairing on processing_jobs: both present or both null.
+-- (6) idempotency_key: non-empty and bounded. The base migration declared it
+-- NOT NULL; this pins a sensible upper bound. Idempotency keys take the form
+-- "<kind>:<uuid>:<version-or-hash>" (ADR-003 §队列、幂等与失败恢复), e.g.
+-- "extract:<uuid>:<64-hex>" ≈ 110 chars; 256 leaves ample headroom without
+-- permitting unbounded keys.
+-- ---------------------------------------------------------------------------
+alter table public.processing_jobs
+  drop constraint if exists processing_jobs_idempotency_key_bounds_check;
+alter table public.processing_jobs
+  add constraint processing_jobs_idempotency_key_bounds_check
+  check (char_length(idempotency_key) between 1 and 256);
+
+-- ---------------------------------------------------------------------------
+-- (6) lease token/expiry pairing AND running jobs must hold a lease. The first
+-- constraint enforces both-or-neither; the second requires a running job to
+-- actually have a lease so a worker can be held accountable for progress.
 -- ---------------------------------------------------------------------------
 alter table public.processing_jobs
   drop constraint if exists processing_jobs_lease_pairing_check;
@@ -134,27 +171,14 @@ alter table public.processing_jobs
   add constraint processing_jobs_lease_pairing_check
   check ((lease_token is null) = (lease_expires_at is null));
 
--- ---------------------------------------------------------------------------
--- (6) content_hash non-empty guard (format left to the parser slice). The
--- columns are already NOT NULL; this only rejects empty strings.
--- ---------------------------------------------------------------------------
-alter table public.material_revisions
-  drop constraint if exists material_revisions_content_hash_nonempty_check;
-alter table public.material_revisions
-  add constraint material_revisions_content_hash_nonempty_check
-  check (char_length(content_hash) > 0);
-
-alter table public.material_segments
-  drop constraint if exists material_segments_content_hash_nonempty_check;
-alter table public.material_segments
-  add constraint material_segments_content_hash_nonempty_check
-  check (char_length(content_hash) > 0);
-
-alter table public.claim_evidence
-  drop constraint if exists claim_evidence_content_hash_nonempty_check;
-alter table public.claim_evidence
-  add constraint claim_evidence_content_hash_nonempty_check
-  check (char_length(content_hash) > 0);
+alter table public.processing_jobs
+  drop constraint if exists processing_jobs_running_requires_lease_check;
+alter table public.processing_jobs
+  add constraint processing_jobs_running_requires_lease_check
+  check (
+    status <> 'running'
+    or (lease_token is not null and lease_expires_at is not null)
+  );
 
 -- ---------------------------------------------------------------------------
 -- (5) claim_revisions.actor must be the claim's owner. The base migration
@@ -186,49 +210,76 @@ deferrable initially deferred
 for each row execute function public.assert_claim_revision_actor();
 
 -- ---------------------------------------------------------------------------
--- (3) Evidence integrity on the DELETE path. The base migration only asserted
--- "AI claim has >= 1 evidence" on claim insert/update. A deferred constraint
--- trigger on claim_evidence DELETE closes the gap: at commit time it checks the
--- claim that owned the deleted evidence — if that claim is still alive and is
--- an AI claim with zero remaining evidence, the transaction aborts.
+-- (3) Evidence integrity across the claim_evidence mutation paths. The base
+-- migration asserted "AI claim has >= 1 evidence" only on claim insert/update,
+-- and its consistency trigger (assert_claim_evidence_consistency) only checks
+-- the NEW association after an insert/update — it never checks the OLD claim.
+-- This leaves two holes this slice closes:
+--
+--   * DELETE of the last evidence of a surviving AI claim (base gap).
+--   * UPDATE that moves an evidence row to a different claim (claim_id change),
+--     which can silently strand the OLD claim at zero evidence.
+--
+-- One deferred constraint trigger covers both by examining the claim whose
+-- evidence set shrank (OLD.claim_id) at commit time. If that claim is still
+-- alive and is an AI claim with zero remaining evidence, the transaction
+-- aborts.
 --
 -- Why deferred: a cascaded delete (material/experience -> ... -> claim_evidence
 -- and -> claims) removes the evidence before the claim, but by commit time the
--- claim is gone too, so the invariant is vacuous and cascades are not blocked.
--- A direct delete of an evidence row that strands a surviving AI claim IS
+-- claim is gone too, so the invariant is vacuous and cascades are NOT blocked.
+-- A direct delete, or an association move that strands a surviving AI claim, IS
 -- rejected. This matches the approved "新增/修改/删除路径上保证每条存活 AI
--- claim 至少一条有效 evidence" requirement.
+-- claim 至少一条同 revision、同 run evidence" requirement (design §7 item 3);
+-- the same-revision/same-run property for the NEW association is already
+-- enforced by the base migration's assert_claim_evidence_consistency trigger.
 -- ---------------------------------------------------------------------------
-create or replace function public.assert_evidence_delete_preserves_ai_claim()
+create or replace function public.assert_evidence_removal_preserves_ai_claim()
 returns trigger
 language plpgsql
 set search_path = ''
 as $$
 declare
+  v_affected uuid;
   v_origin text;
   v_remaining integer;
 begin
-  -- The claim that owned the deleted evidence. If it was itself deleted in the
-  -- same transaction (cascade), this returns no row and the check is skipped.
-  select origin into v_origin from public.claims where id = old.claim_id;
+  -- The claim whose evidence set shrank. On DELETE it is the removed row's
+  -- claim. On UPDATE it is the old claim, and only when the association moved
+  -- (a same-claim update cannot shrink the old claim's evidence count). A
+  -- quote/offset/segment/run update that does not touch claim_id does not fire
+  -- this trigger (it is declared `update of claim_id`).
+  if tg_op = 'DELETE' then
+    v_affected := old.claim_id;
+  elsif old.claim_id is distinct from new.claim_id then
+    v_affected := old.claim_id;
+  else
+    -- Same-claim update: the old claim's evidence count is unchanged.
+    return old;
+  end if;
+
+  -- If the affected claim was itself removed in the same transaction (cascade),
+  -- there is no surviving claim to protect; the check is skipped.
+  select origin into v_origin from public.claims where id = v_affected;
   if v_origin = 'ai' then
     select count(*) into v_remaining
       from public.claim_evidence
-      where claim_id = old.claim_id;
+      where claim_id = v_affected;
     if v_remaining = 0 then
-      raise exception 'deleting this evidence would leave an AI claim with no evidence';
+      raise exception 'this change would leave an AI claim with no evidence';
     end if;
   end if;
+
   return old;
 end;
 $$;
-revoke all on function public.assert_evidence_delete_preserves_ai_claim() from public, anon, authenticated;
+revoke all on function public.assert_evidence_removal_preserves_ai_claim() from public, anon, authenticated;
 
-drop trigger if exists claim_evidence_delete_preserves_ai_claim on public.claim_evidence;
-create constraint trigger claim_evidence_delete_preserves_ai_claim
-after delete on public.claim_evidence
+drop trigger if exists claim_evidence_removal_preserves_ai_claim on public.claim_evidence;
+create constraint trigger claim_evidence_removal_preserves_ai_claim
+after delete or update of claim_id on public.claim_evidence
 deferrable initially deferred
-for each row execute function public.assert_evidence_delete_preserves_ai_claim();
+for each row execute function public.assert_evidence_removal_preserves_ai_claim();
 
 commit;
 
@@ -238,9 +289,9 @@ commit;
 -- These constraints are additive and safe to leave in place. To revert on an
 -- empty development project (destructive), drop each constraint/trigger/function
 -- added above by name, e.g.:
---   drop trigger if exists claim_evidence_delete_preserves_ai_claim on public.claim_evidence;
+--   drop trigger if exists claim_evidence_removal_preserves_ai_claim on public.claim_evidence;
 --   drop trigger if exists claim_revisions_actor_owner on public.claim_revisions;
---   drop function if exists public.assert_evidence_delete_preserves_ai_claim();
+--   drop function if exists public.assert_evidence_removal_preserves_ai_claim();
 --   drop function if exists public.assert_claim_revision_actor();
 --   alter table public.material_segments drop constraint if exists material_segments_revision_sequence_key;
 --   ... (drop each *_check constraint added above) ...
