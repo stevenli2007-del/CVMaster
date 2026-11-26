@@ -10,7 +10,7 @@
 - CP1 星球少，使用固定种子坐标布局，避免引入模拟依赖；真实数据规模和关系更明确后，再评估 `d3-force-3d`。
 - 数据与账户：Supabase Auth + PostgreSQL，使用 Supabase Storage 保存私有文件。
 - 服务端：Next.js Route Handlers / Server Actions 负责授权后的业务操作和 AI 调用；耗时处理可迁移到队列/后台 worker。
-- AI：Provider adapter 层统一 BYOK 请求、结构化输出、重试、限流与错误；首版 provider 清单在实现前确认。
+- AI：采用 provider-neutral / user-selected provider 原则。用户自己选择 provider、API key、model、endpoint 和 protocol；CVMaster 通过版本化 adapter 按配置调用，统一结构化输出、重试、限流与错误。首个 adapter 可优先支持 OpenAI-compatible API，DeepSeek、Qwen 等是可配置/优先验证对象而非唯一支持范围。
 - 校验：Zod（或同类 schema validator）校验用户请求、数据库边界和模型输出。
 - 观测：脱敏错误追踪与指标；禁止收集原始简历、素材和凭证。
 
@@ -38,7 +38,8 @@ Supabase Auth + Postgres (RLS) + private Storage
 - `anon`/publishable key 可以进入浏览器，但数据库访问必须依赖正确 grants 与 RLS；service role key 只允许服务端使用。RLS 要覆盖每张暴露用户表。
 - 每个业务接口先验证登录用户，再校验被访问对象属于当前用户；不能依赖前端隐藏按钮。
 - BYOK API key 不回传明文、不写日志、不进入浏览器持久化。加密存储由服务端完成，解密权限限定到 AI 请求路径；未完成密钥管理 ADR 前不得上线持久化密钥功能。
-- 对模型 provider 明示数据会发送到用户选定的 provider；配置 provider 不等于允许把账户中所有材料无差别发送出去，每次任务只发送所需内容。
+- 对模型 provider 明示数据会发送到用户选定的 provider/model/endpoint；配置 provider 不等于允许把账户中所有材料无差别发送出去，每次任务只发送所需内容。更换 provider、model、endpoint、protocol 或 adapter version 必须重新 preview + consent，不做未经同意的跨 provider fallback。
+- 自定义 AI endpoint 仅允许 HTTPS；阻止内网、loopback、metadata、DNS rebinding 和危险 redirect；API key 只能发送到 preview 已展示且 consent 的目标，不记录 key、完整请求或原始响应。不支持的配置返回 `unsupported_provider` / `unsupported_protocol`，不静默切换服务。
 - URL 导入防 SSRF：只允许 http/https；拒绝 loopback、私网、link-local、metadata 地址；解析并校验 DNS 和每次重定向目标；限制跳转、响应大小、MIME、超时；禁止携带用户 cookie；内容提取在隔离/受限环境执行。
 - 文件上传校验 MIME 与大小，使用随机对象 key、private bucket、短时下载 URL；不把用户文件名当路径。
 - AI 和 LaTeX 内容均视为不可信输入；HTML 渲染转义，命令/文件路径不得由模型直接控制，LaTeX 特殊字符必须编码。
@@ -51,7 +52,7 @@ Supabase Auth + Postgres (RLS) + private Storage
 1. 输入归一化为带来源 ID 的文本/元数据；文件解析过程保留原始对象引用。
 2. 使用版本化 prompt 与 schema 提取 claims、原文证据片段、时间/角色/技术/成果、待补字段。
 3. 校验输出并保存结构化结果与模型/提示词版本；来源证据必须定位到素材或内容片段。
-4. 用户确认前标记 `proposed`；用户确认/修改后成为可用于简历的 `confirmed` claim。
+4. 用户确认前标记 `pending`；用户确认/修改后成为可用于简历的 `confirmed` claim，拒绝则标记 `rejected`。
 
 ### 简历生成
 
@@ -80,7 +81,7 @@ Supabase Auth + Postgres (RLS) + private Storage
 1. ADR-001：BYOK 密钥加密、访问、轮换和删除。
 2. ADR-002：LaTeX 编译隔离、资源限制和 PDF 导出。
 3. ADR-003：文件/网页解析队列与数据保留策略。
-4. ADR-004：首发 AI provider 与模型输出 schema。
+4. ADR-004：用户自选 AI provider、协议/endpoint 适配与模型输出 schema。
 
 ## 8. 官方参考
 

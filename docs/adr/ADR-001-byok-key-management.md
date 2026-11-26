@@ -42,12 +42,12 @@ BYOK 有一个不可回避的明文入口：用户必须在浏览器表单录入
 
 ### 3. 访问控制
 
-- `anon/authenticated` 对密文字段和内部密钥操作零权限；浏览器只能读取 provider、label、last_four、状态和时间等非敏感 metadata。
+- `anon/authenticated` 对密文字段和内部密钥操作零权限；浏览器只能读取 provider、label、model、脱敏 endpoint、protocol、last_four、状态和时间等非敏感配置与 metadata。
 - 保存、替换、删除、解密分别走独立服务端函数。解密函数不暴露为通用 Route Handler，也不接受任意 credential ID 列表。
 - AI worker 从已验证、owner 匹配、状态 active 的 run 取得单个 credential ID，在发请求前解密一次。禁止批量列出或导出明文。
-- provider base URL 使用服务端 allowlist 和 HTTPS，禁止用户提供的 arbitrary base URL/redirect 把 Authorization 转发到攻击者域名。
+- endpoint 由用户配置，不设置品牌 allowlist；仅允许 HTTPS，并在 preview 展示目标域名。服务端必须阻止内网、loopback、metadata、DNS rebinding 和危险 redirect；API key 只能发送到已展示且 consent 的目标，不得经 redirect、代理或 SDK 默认配置转发到其他域名。
 - service role 只在服务端使用且仍需显式 owner 条件。拥有数据库和 KEK 的运维主体仍能解密，这是剩余信任边界，需通过环境隔离、最小权限和审计降低风险。
-- “Test connection” 若后续加入，必须由用户单独触发、只访问 provider 官方端点且不携带素材；保存 key 不隐式发送素材。
+- “Test connection” 若后续加入，必须由用户单独触发，只访问 preview 已展示且通过相同 endpoint 安全检查的用户配置，不携带素材；保存 key 不隐式发送素材。
 
 ### 4. 两类轮换
 

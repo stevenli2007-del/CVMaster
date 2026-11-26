@@ -46,6 +46,7 @@ auth.users
 ### extraction_runs
 
 - `id uuid`, `user_id uuid`, `material_id uuid`, `provider text`, `model text`
+- `endpoint text`（规范化且不含 secret）, `protocol text`, `adapter_id text`, `adapter_version text`
 - `prompt_version text`, `schema_version text`, `status text`, `started_at`, `finished_at`
 - `usage jsonb null`（token 与成本计量，不含 prompt 原文）；原始模型输出默认不保存。
 
@@ -60,9 +61,9 @@ auth.users
 
 ### ai_credentials
 
-- `id uuid`, `user_id uuid`, `provider text`, `label text null`
+- `id uuid`, `user_id uuid`, `provider text`, `label text null`, `model text`, `endpoint text`, `protocol text`
 - `ciphertext text`, `key_version text`, `last_four text null`, `created_at`, `updated_at`
-- 禁止保存明文 key。客户端只读 provider、label、last_four 等非敏感字段；写入、解密和删除仅走授权服务端路径。实际加密方式需 ADR-001。
+- 禁止保存明文 key；endpoint 必须规范化且不含 secret。客户端只读 provider、label、model、endpoint、protocol、last_four 等非敏感配置；写入、解密和删除仅走授权服务端路径。实际加密方式需 ADR-001。
 
 ### job_applications / job_requirements
 

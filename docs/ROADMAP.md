@@ -24,9 +24,9 @@
 
 ## CP3 — AI 提取与证据校对
 
-**目标**：接首发 provider；BYOK 安全管理；文字/公开网页/文件进入异步提取，形成可引用的 claims。  
-**验收演示**：展示原素材→提取 facts→来源跳转→确认/编辑/拒绝；provider 失败时不丢素材。  
-**用户查收**：模型/provider、发给模型的数据范围、密钥管理 UX、确认状态和提取粒度。  
+**目标**：接入用户自选的 provider/key/model/endpoint/protocol 配置与版本化 adapter；BYOK 安全管理；文字/公开网页/文件进入异步提取，形成可引用的 claims。
+**验收演示**：展示原素材→提取 facts→来源跳转→确认/编辑/拒绝；provider 失败时不丢素材，不静默切换 provider。
+**用户查收**：provider/model/endpoint/protocol 配置、目标域名和发给模型的数据范围、密钥管理 UX、确认状态和提取粒度。
 **阻断决策**：在 CP3 实现前完成 ADR-001、ADR-003、ADR-004。
 
 ## CP4 — JD 匹配与简历编辑

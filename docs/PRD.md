@@ -26,7 +26,7 @@ CVMaster 是一个以证据为中心的求职工作台：用户随手投入链�
 
 - 注册、登录、登出、密码重置。
 - 个人资料保存联系方式、教育背景、技能和简历偏好。
-- 用户可以管理自己的模型提供方及 API key；密钥安全实现是上线前的技术 checkpoint。
+- 用户可以管理自己的 provider、API key、model、endpoint 和 protocol；CVMaster 按用户配置通过受支持的 adapter 调用，不指定唯一 provider。密钥安全实现是上线前的技术 checkpoint。
 
 ### 3.2 经历与素材库
 
@@ -86,7 +86,7 @@ CVMaster 是一个以证据为中心的求职工作台：用户随手投入链�
 
 ## 7. 待决事项
 
-- BYOK 的首发 provider、密钥持久化策略、隐私说明和密钥删除/轮换体验。
+- BYOK 的 provider-neutral 配置与协议适配范围、密钥持久化策略、各配置的数据保留/隐私说明和密钥删除/轮换体验。
 - LaTeX 编译放在自托管隔离 worker、第三方 API，还是先交付 `.tex` 并在下一 checkpoint 补 PDF。
 - 图片 OCR 与截图职位描述是否纳入首发；公开 URL 的允许域名、抓取限制和 robots/版权说明。
 - 首版模板（单栏/双栏、字体、页边距）及中英文简历支持范围。

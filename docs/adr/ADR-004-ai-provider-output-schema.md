@@ -1,6 +1,6 @@
-# ADR-004：首发 AI provider、模型选择、请求数据范围与结构化输出版本
+# ADR-004：用户自选 AI provider、协议适配、请求数据范围与结构化输出版本
 
-状态：Proposed（待 Steven 与 Codex 审阅；provider/model 尚未获产品确认）
+状态：Proposed（待 Steven 与 Codex 审阅；不指定唯一或默认 provider/model，不授权 CP3 实现）
 日期：2026-11-25
 关联：[CP3 总体设计](../design/CP3-ai-extraction-evidence-design.md)、[ADR-001](ADR-001-byok-key-management.md)、[ADR-003](ADR-003-parsing-queue-retention.md)
 
@@ -10,43 +10,41 @@ CP3 不是自由文本聊天，而是把不可信素材转成可审阅、可定�
 
 ## 推荐决定
 
-1. **首发候选 provider：OpenAI，经用户自己的 BYOK 账户调用。**
-2. **候选默认模型：`gpt-5.4-mini`；CP3 开工时先复核官方可用性、Structured Outputs、价格和快照，再锁定精确 model ID。** 本 ADR 不把候选型号视为已批准，也不允许生产自动跟随 floating alias 升级。
-3. 使用 Responses API 的 Structured Outputs/JSON Schema 能力，应用仍做严格 runtime validation 和证据定位验证。请求使用无状态模式，设置 `store:false`，不启用 provider-hosted tools、background mode、conversation state 或 previous response chaining。
-4. CP3 只支持服务端 allowlist 中的官方 provider endpoint；不开放自定义 base URL，不做未经新 consent 的跨 provider 自动 fallback。
-5. 每次任务只发送用户 preview 并确认的 material revision segments。默认不发送 profile、experience 全集、其他素材、文件名、原始 URL、BYOK metadata 或历史对话。
-6. 首发 schema 为 `cvmaster.extraction.v1`，prompt 独立版本化；所有 AI claims 只能以 pending 入库，每条至少一个经服务端核验的 evidence。
+1. **采用 provider-neutral / user-selected provider 原则。** 用户自己选择 provider、API key、model、endpoint 和 protocol；在协议已支持且安全校验通过的前提下，**用户选择哪家 API，CVMaster 就调用哪家 API**。CVMaster 不替用户指定 OpenAI、DeepSeek、Qwen 或其他唯一/默认 provider。
+2. 不同 provider 通过版本化 adapter 接入。首个 adapter 可以优先支持 OpenAI-compatible API，以降低协议适配成本；DeepSeek、Qwen 及其他兼容服务都可作为用户配置和优先验证对象，但这不代表唯一支持范围，也不构成品牌推荐。
+3. 每次任务只发送用户 preview 并确认的 material revision segments。默认不发送 profile、experience 全集、其他素材、文件名、原始素材 URL、BYOK metadata 或历史对话。
+4. 统一内部输出契约为 `cvmaster.extraction.v1`，prompt 独立版本化。无论 provider 是否支持原生 Structured Outputs，服务端都执行 schema 和 quote/evidence 校验；所有 AI claims 只能以 pending 入库，每条至少一个经服务端核验的 evidence。
+5. 不做未经用户同意的跨 provider 自动 fallback。用户更换 provider、model、endpoint、protocol 或 adapter version 后，必须重新 preview 和 consent；失败时不得静默改投另一家 API。
+6. 每次 run 不可变记录 provider、model、规范化 endpoint、protocol、adapter ID/version、schema/prompt version，以及实际返回的 model/version（若提供）。
+7. 用户配置无法匹配已安装 adapter 或协议能力时，返回明确的 `unsupported_provider` 或 `unsupported_protocol`，不得改用其他 provider/protocol 假装成功。
 
-选择 OpenAI/mini 的理由是首发工程确定性：官方提供 schema-constrained outputs，mini 档位适合先评估成本/延迟，而不是假定它在事实质量上必然优于其他 provider。最终仍需用 CVMaster 的合成 golden set 做证据质量评测。
-
-## Provider 备选与取舍
+## 协议与 provider 接入策略
 
 | 方案 | 优点 | 代价/风险 | 结论 |
 |---|---|---|---|
-| OpenAI + 候选 `gpt-5.4-mini`（推荐候选） | Structured Outputs 与 Responses API；适合版本化 JSON Schema；BYOK 直接 | token/重试成本；数据出境与保留受用户 provider 项目设置影响；结构化输出仍不保证语义真实 | 通过评测和隐私确认后首发 |
-| Google Gemini 的结构化输出 | 支持 response schema，可作为第二 adapter | 新 SDK/错误/usage/保留策略与账号体系；schema 子集差异需兼容测试 | 备选，不做无 consent 自动 fallback |
-| DeepSeek | OpenAI-compatible API 可降低接入成本；用户已有使用经验 | 官方 JSON Output 文档保证合法 JSON，不等同于严格 schema adherence；需要更多校验/重试，隐私与地区条款另审 | 可作为低成本候选参与同一 golden eval，但不因熟悉而直接首发 |
-| 更强/更高价模型 | 可能改善复杂证据抽取 | 成本和延迟增加，仍会产生语义 hallucination | 仅在 golden eval 证明收益后作为用户可选 profile |
-| 自托管模型 | 数据路径可控、可减少第三方外发 | GPU/运维/模型质量/安全更新成本高，不再是典型 BYOK | 非 CP3 |
+| OpenAI-compatible adapter（首个优先验证） | 一类协议可覆盖多个用户自选服务；减少首个纵向切片复杂度 | 各服务对 structured outputs、idempotency、usage 和错误的支持并不一致 | 是协议起点，不是 provider 白名单；DeepSeek、Qwen 等可优先做兼容验证 |
+| Provider 原生协议 adapter | 能表达特定 provider 的结构化输出、计费与保留能力 | 每个 adapter 都需要独立 contract tests、隐私说明和版本维护 | 按用户需求逐个增加，不设置品牌上限 |
+| 用户自托管/其他 HTTPS API | 用户可选择自己的部署与数据路径 | 仍需公网安全 endpoint、协议适配、资源限制和 egress 防护 | 不因“自托管”绕过 HTTPS/SSRF 检查 |
+| 未支持的 provider/protocol | 明确告诉用户当前边界 | 需要用户更换已支持配置或等待新 adapter | 返回 `unsupported_provider` / `unsupported_protocol`，绝不静默 fallback |
 
-Provider adapter 应声明能力而非假定一致：`strict_json_schema`、`request_idempotency`、`result_lookup`、`store_false`、`usage_reporting`、`supported_parameters`。缺少严格 schema 时可以服务端校验兜底，但缺少幂等时必须启用 `outcome_unknown`，不能统一盲目重试。
+Provider adapter 应声明能力而非假定一致：`strict_json_schema`、`request_idempotency`、`result_lookup`、`store_false`、`usage_reporting`、`supported_parameters`。缺少严格 schema 时可以通过统一 prompt 请求 JSON 并由服务端校验兜底，但必须在 preview 中明示能力差异；缺少幂等时必须启用 `outcome_unknown`，不能统一盲目重试。
 
-## 模型选择与上线评测
+## 用户配置与协议能力验证
 
-锁定 model ID 前记录：
+对用户实际选择的每份 provider 配置记录并验证：
 
-- BYOK 普通账户是否可用、精确 snapshot/alias 行为、上下文和输出限制；
-- Structured Outputs 对首发 schema 的支持与拒绝行为；
+- provider/config label、用户指定 model、endpoint、protocol 和 adapter version；
+- 协议是否支持所需 JSON 输出、上下文/输出限制、usage、idempotency、超时与错误语义；
 - 中英文混合、日期/数字、多证据、重复文本、长文档的抽取质量；
 - p50/p95 延迟、实际 token usage、每个成功确认 claim 的成本，而不只看每次调用价格；
-- provider 数据使用、滥用监测、应用状态、备份、地区与删除政策。
+- 该 provider/endpoint 的数据使用、滥用监测、应用状态、备份、地区与删除政策。
 
-Golden set 只能使用合成或明确授权的数据。硬门槛：
+Golden set 只能使用合成或明确授权的数据，可以优先验证 DeepSeek + Qwen 的用户配置，也可以验证其他任何已支持协议。硬门槛：
 
 1. 所有入库 AI claims 都有服务端可重算的 evidence；schema/quote/offset/owner 校验失败项零入库。
 2. 人工评测另行衡量“quote 是否真的支持 claim”，因为字符串匹配不能证明语义 entailment。
 3. 无依据事实率、漏提率、可确认率、partial rate、成本和延迟的阈值在评测前由 Steven/Codex 确认，不能看完结果再移动门槛。
-4. 候选未通过则不首发该 model；不得靠把 pending 自动改 confirmed 来掩盖质量问题。
+4. 某份配置未通过时，只标记该配置验证失败，不自动替换 provider/model，也不得靠把 pending 自动改 confirmed 来掩盖质量问题。
 
 ## 单次请求的数据范围
 
@@ -68,28 +66,37 @@ Golden set 只能使用合成或明确授权的数据。硬门槛：
 
 ### 用户控制与可证明性
 
-1. preview 展示实际将发送的文本片段、provider/model、用途、参数、估算 token/费用和最大尝试次数。
-2. 服务端按 `scope + provider + model + prompt_version + schema_version + payload_builder_version` 生成 canonical payload hash；用户 consent 绑定此 hash。
-3. 发送前重新构建并比对 hash。浏览器提交的 provider/model/owner/usage 数值都不被信任。
-4. 测试用 provider stub 捕获实际请求，逐字段证明它与 preview scope 一致；不能只检查 UI 文案。
-5. run 记录实际 usage、request/attempt 状态和 provider response ID（若有），不记录 prompt/response 原文。
-6. 改变任何内容、片段、模型、prompt/schema 或 provider 都需要新 consent。原 consent 不允许被用于“顺便”处理整个 experience。
+1. preview 必须展示 provider、model、protocol、目标域名和脱敏后的完整 endpoint、实际发送内容范围、估算 token/费用及最大重试次数。无法可靠估算价格时必须显示 unknown 并要求用户确认预算，不能编造价格。
+2. 服务端按 `scope + provider + model + endpoint + protocol + adapter_version + prompt_version + schema_version + payload_builder_version` 生成 canonical payload hash；用户 consent 绑定此 hash。
+3. 发送前重新构建并比对 hash。浏览器提交的 provider/model/endpoint/owner/usage 数值都不被信任；endpoint 必须由服务端重新规范化和做安全校验。
+4. 测试用 provider stub 捕获实际请求，逐字段证明它与 preview scope、目标域名和 protocol 一致；不能只检查 UI 文案。
+5. run 记录实际 usage、request/attempt 状态和 provider response ID（若有），但不记录 API key、完整请求或原始响应。
+6. 改变任何内容、片段、provider、model、endpoint、protocol、adapter version 或 prompt/schema 都需要重新 preview 和 consent。原 consent 不允许被用于“顺便”处理整个 experience 或发送到另一目标。
+
+## 用户自定义 endpoint 的安全约束
+
+自定义 endpoint 是产品能力，不是绕过网络安全边界的理由：
+
+1. 仅允许 HTTPS；拒绝 userinfo、fragment 和把 API key 放在 URL/query 中。协议需要的非敏感 query 参数可以保留，但必须进入规范化 endpoint、preview 和 payload hash。
+2. 对初始目标解析所有 A/AAAA，仅允许全局可路由 unicast 地址；阻止内网、loopback、link-local、metadata、multicast、保留地址和 IPv4-mapped IPv6 绕过。连接固定到已验证 IP 并保持正确 Host/SNI，同时由 egress policy 防 DNS rebinding。
+3. 首个 adapter 默认不跟随携带凭证的 redirect。未来若协议确需支持，每次 redirect 都必须重新做协议/IP/端口校验，跨 origin redirect 一律拒绝；最终目标未展示并获得新 consent 前不得发送 API key。
+4. API key 只能随 HTTPS 请求发送到 preview 中展示并经用户 consent 的目标。不得因为 DNS、redirect、代理环境变量、provider SDK 默认配置或错误恢复而把 key 发往另一域名。
+5. 禁用请求体/响应体日志和 SDK debug logging；不记录 key、完整请求或原始响应。错误只保留安全分类、状态码和脱敏 metadata。
+6. 设置连接/总超时、响应大小、速率、并发和重试上限。endpoint 返回的 HTML、错误文本和模型输出都按不可信输入处理，不能控制二次 URL、命令、路径或 job。
+7. 不支持用户配置的 provider/protocol 时返回 `unsupported_provider` 或 `unsupported_protocol`；安全检查失败返回独立错误码，不降级到 HTTP，不改用官方或其他 provider endpoint。
 
 ## 数据使用与保留说明
 
-以 2026-11-25 查阅的 OpenAI 官方文档为设计依据：
+数据政策取决于用户实际选择的 provider、endpoint、protocol 和账户设置。CVMaster 必须展示该配置对应的隐私说明与政策链接，不得用某一品牌的数据政策概括全部 provider。
 
-- API 数据默认不用于训练，除非客户明确选择共享；这不妨碍 provider 为安全/滥用监测保存数据。
-- Responses API 的应用状态默认可保留 30 天；请求 `store:false` 可禁用相应应用状态存储。
-- **`store:false` 不等于 Zero Data Retention。** 官方说明滥用监测日志默认最长可保留 30 天，ZDR/调整版监测可能需要组织资格与额外批准。
-
-因此 CVMaster 不得宣传“素材绝不被 provider 保存”或“删除素材即删除所有第三方副本”。BYOK 使用用户自己的 provider 项目，CVMaster 不能替用户假定已获 ZDR。确认页应链接 provider 当前政策，并由 Steven 批准最终隐私文案；其他 provider 上线前做同等审查。
-
-本地默认不保存原始模型输出，只保存通过校验的结构化结果、证据、版本和 usage。删除素材会删除本地 runs/claims/evidence/consents，但不能追溯撤销已经发送的 provider 内容。
+- adapter 支持 `store:false` 或等价控制时，可按用户配置使用并记录该能力；不支持时不能假装已启用。任何此类设置都不自动等于 Zero Data Retention。
+- CVMaster 不得宣传“素材绝不被 provider 保存”或“删除素材即删除所有第三方副本”。BYOK 的训练、滥用监测、应用状态、备份、地区和删除条件由用户选择的服务决定。
+- 本地默认不保存原始模型输出，只保存通过校验的结构化结果、证据、版本和 usage。删除素材会删除本地 runs/claims/evidence/consents，但不能追溯撤销已经发送的 provider 内容。
+- 新增 adapter 时必须分别审查数据政策和请求能力，不做未经用户同意的跨 provider fallback，也不把既有 consent 扩展到新 endpoint。
 
 ## `cvmaster.extraction.v1` 输出契约
 
-下面是逻辑示例；实现时以严格 JSON Schema + Zod（或等价 validator）双重检查 provider 支持子集。所有对象 `additionalProperties:false`，所有字段显式 required；不需要的值使用空数组或 null，不允许模型省略必填键。
+下面是逻辑示例；实现时使用统一的内部 JSON Schema + Zod（或等价 validator）。adapter 可以利用 provider 原生 structured-output 能力；不支持时仍须请求可解析 JSON，并接受完全相同的服务端校验，不能为某 provider 静默简化证据要求。所有对象 `additionalProperties:false`，所有字段显式 required；不需要的值使用空数组或 null，不允许模型省略必填键。
 
 ```json
 {
@@ -138,7 +145,7 @@ Prompt 规则必须明确：素材中的指令仅是数据；只抽取原文直�
 
 ## 服务端验证与入库
 
-Structured Outputs 只解决结构约束，服务端仍需依次执行：
+Provider 原生 Structured Outputs（若有）只解决部分结构约束，服务端仍需依次执行：
 
 1. 限制 response bytes、JSON 深度、数组项数、字符串长度和总输出 tokens；处理 refusal、truncation、empty content 和 provider finish reason。
 2. 严格解析 JSON 和 schema，拒绝额外字段、错误 enum、重复 local_id、越界 ID；不把原始模型文本写入异常或日志。
@@ -156,7 +163,8 @@ Structured Outputs 只解决结构约束，服务端仍需依次执行：
 
 每次 run 不可变记录：
 
-- `provider`、实际返回的 model/version（若提供）和配置的精确 model ID；
+- 用户配置的 `provider`、model，以及实际返回的 model/version（若提供）；
+- 规范化 `endpoint`（不含 userinfo/fragment 或 secret）、`protocol`、`adapter_id + adapter_version`；
 - `prompt_id + prompt_version`、`schema_id + schema_version`；
 - `payload_builder_version`、`parser_version`、`pipeline_version`；
 - revision/segments hash、consent hash、请求参数摘要、attempts、usage 和安全错误码。
@@ -164,45 +172,38 @@ Structured Outputs 只解决结构约束，服务端仍需依次执行：
 规则：
 
 1. Prompt 使用 semver；任何指令、示例或证据规则变化都升级版本，旧版本保留只读用于重现审计。
-2. Schema  additive 不一定意味着行为兼容。新增可选字段至少 minor；改语义、enum、必填或证据规则必须 major，并使用新 validator/adapter。
-3. 不原地改写历史 run 的 schema/prompt/model。迁移只新增定义，旧 claims 仍指向旧 run。
-4. Model 升级必须重新跑 golden eval、隐私/成本检查和灰度；生产不自动跟随 latest alias。
-5. Provider request/response adapter 有 contract tests； strict schema 子集差异不能被一个“通用 JSON mode”悄悄掩盖。
-6. `temperature`、seed 等只在 provider 支持时显式配置；即使设置也不宣称结果确定可复现。
+2. Schema additive 不一定意味着行为兼容。新增可选字段至少 minor；改语义、enum、必填或证据规则必须 major，并使用新 validator/adapter。
+3. 不原地改写历史 run 的 provider/model/endpoint/protocol/adapter/schema/prompt。迁移只新增定义，旧 claims 仍指向旧 run。
+4. 用户更换 provider、model、endpoint、protocol 或 adapter version 必须重新 preview + consent，并重新评估隐私、能力和成本。CVMaster 不自动跟随 latest alias；若用户自己选择 alias 且 provider 改变底层版本，只能记录实际返回版本（若有）并明确这一限制。
+5. 每个 provider request/response adapter 都有独立 contract tests；协议或 strict schema 能力差异不能被一个“通用 JSON mode”悄悄掩盖。
+6. `temperature`、seed、`store:false` 等只在 protocol 支持且用户配置时显式传递；不支持时不得假装生效，即使支持也不宣称结果确定可复现或零保留。
 7. CP4 JD/resume 使用不同 schema 和 prompt 版本，不复用 extraction schema 假装能完成生成任务。
 
 ## 成本、隐私、部署、迁移和扩展影响
 
-- **成本**：segments 数量、输入/输出 tokens、retry 和 model profile 是主要变量；用户 BYOK 承担费用，因此 consent 必须包含预算，重复请求必须可审计。
-- **隐私**：最小 scope、`store:false` 和本地不存 raw output 降低保留，但不消除 provider 日志/备份；provider 地区与 ZDR 是上线决策。
-- **部署**：只需 extraction orchestrator 访问 provider 官方 HTTPS endpoint 和 BYOK 解密函数；parse sandbox 不获得这些权限。
-- **迁移**：新增 consents/runs/claims/evidence 及版本字段；CP2 没有这些实际表，主要是 additive migration + materials revision backfill。
-- **扩展**：adapter 可增加 provider/model，但每个都需要独立 consent、能力声明、隐私说明和评测；禁止静默 fallback 把同一素材发给第二家。
+- **成本**：segments 数量、输入/输出 tokens、retry 和用户选择的 model/endpoint 是主要变量；用户 BYOK 承担费用，因此 consent 必须包含预算，重复请求必须可审计。
+- **隐私**：最小 scope 和本地不存 raw output 降低保留，但不消除用户所选服务的日志/备份；数据政策、地区与保留控制必须按配置展示。
+- **部署**：extraction orchestrator 可以访问用户 consent 的 HTTPS endpoint 和 BYOK 解密函数，同时具备 DNS/IP/egress 安全控制；parse sandbox 不获得这些权限。
+- **迁移**：新增 consents/runs/claims/evidence 及 provider/model/endpoint/protocol/adapter/schema/prompt 版本字段；CP2 没有这些实际表，主要是 additive migration + materials revision backfill。
+- **扩展**：通过 adapter 增加协议而非维护品牌白名单。每种配置都需要独立 consent、能力声明和隐私说明；禁止静默 fallback 把同一素材发给另一目标。
 
 ## 风险与剩余限制
 
 - 精确 quote 可能存在，但 claim 仍可能曲解原意；pending + 人工校对是必要控制，不是装饰。
 - 模型可漏掉重要事实；`completed` 不代表完整覆盖素材，产品文案避免“全部整理完毕”。
 - 多 chunk 之间可能重复或冲突；CP3 先保留独立 pending claims，不自动合并成确定事实。
-- `store:false`、ZDR、训练和日志政策随 provider/账户变化；实现时必须复核，不靠缓存文档永久保证。
-- BYOK rate limit/余额和 provider 故障会影响成功率；原素材和 parse segments 始终保留，失败后可按同意范围恢复。
-- 不同语言/行业的质量可能不同；首发语言范围和评测集需用户确认。
+- OpenAI-compatible 只描述请求/响应形状的一部分，不代表各服务在 structured outputs、usage、idempotency 或保留方面完全一致。
+- 自定义 endpoint 扩大 SSRF 和凭证外泄攻击面；HTTPS、DNS pinning、egress、redirect 和 preview 目标绑定是上线硬门槛。
+- BYOK rate limit/余额和 provider 故障会影响成功率；原素材和 parse segments 始终保留，失败后只能按已同意配置恢复。
+- 不同语言/行业和不同配置的质量可能不同；语言范围和评测集需用户确认。
 
 ## 待用户确认
 
-1. 是否选择 OpenAI 作为首发 provider，并让 `gpt-5.4-mini` 与 DeepSeek/Gemini 候选参加同一 golden eval？最终精确 model ID 和预算上限是什么？
+1. 首个 OpenAI-compatible adapter 的协议 profile，以及优先验证哪些 DeepSeek、Qwen 或其他用户配置；这只是验证顺序，不是唯一 provider 清单。
 2. 是否接受每次 extraction 都 preview + consent，而不是配置 key 后自动处理全部素材？
-3. 是否接受 OpenAI 当前数据政策说明，尤其 `store:false` 仍有滥用监测/其他保留，且 BYOK 的 ZDR 由用户项目决定？
-4. 默认不发送原始 URL、文件名、experience name；若需要上下文由用户逐项加入，是否符合产品预期？
-5. 首发中英文范围、单次 token/费用上限、允许的自动重试次数及 `outcome_unknown` UX。
+3. 如何让用户为每份 provider/model/endpoint/protocol 配置确认对应的数据保留说明、地区和预算？无法自动取得价格或政策时如何展示 unknown？
+4. 默认不发送原始素材 URL、文件名、experience name；若需要上下文由用户逐项加入，是否符合产品预期？
+5. 中英文范围、单次 token/费用上限、允许的自动重试次数及 `outcome_unknown` UX。
 6. 原始模型输出默认不保存是否接受？若未来为调试保留，需要单独 opt-in、加密、短保留和新 ADR，不在 CP3 暗中开启。
 7. 首版 claim 粒度和 categories 是否满足校对体验；missing information 是否只作为追问而不进入事实库？
-
-## 官方参考
-
-- [OpenAI Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)：JSON Schema 结构约束；不能替代应用语义验证。
-- [OpenAI Responses / conversation state](https://platform.openai.com/docs/guides/conversation-state)：response state 与 `store:false` 行为。
-- [OpenAI 数据控制](https://developers.openai.com/zh-Hans/api/docs/guides/your-data)：训练、滥用监测、应用状态和 ZDR 的区别。
-- [OpenAI GPT-5.4 mini/nano 发布说明](https://openai.com/zh-Hans-CN/index/introducing-gpt-5-4-mini-and-nano/)：候选 mini 型号的 API 可用性起点；实现时仍须查模型页与价格。
-- [DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode)：合法 JSON 与严格 schema adherence 的差异。
-- [Gemini structured output](https://aistudio.google.com/docs/structured-output)：备选 provider 的 response schema 能力与限制。
+8. `unsupported_provider` / `unsupported_protocol` 的用户文案和新 adapter 提交流程是否符合预期？
