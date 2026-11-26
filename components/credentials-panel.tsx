@@ -76,17 +76,29 @@ export function CredentialsPanel({ onClose }: { onClose: () => void }) {
     setFailed(false);
     const endpoint = editingId ? `/api/credentials/${editingId}` : "/api/credentials";
     const method = editingId ? "PUT" : "POST";
+    // Snapshot the form values, then clear the API key immediately so it does
+    // not linger in React state or the password input regardless of whether the
+    // request succeeds or fails.
+    const snapshot = {
+      provider: form.provider,
+      label: form.label,
+      model: form.model,
+      endpoint: form.endpoint,
+      protocol: form.protocol,
+      apiKey: form.apiKey,
+    };
+    setForm((current) => ({ ...current, apiKey: "" }));
     try {
       const response = await fetch(endpoint, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider: form.provider,
-          label: form.label || null,
-          model: form.model || null,
-          endpoint: form.endpoint,
-          protocol: form.protocol,
-          apiKey: form.apiKey,
+          provider: snapshot.provider,
+          label: snapshot.label || null,
+          model: snapshot.model || null,
+          endpoint: snapshot.endpoint || null,
+          protocol: snapshot.protocol,
+          apiKey: snapshot.apiKey || null,
         }),
       });
       const payload = await response.json().catch(() => null) as { credential?: CredentialDTO; error?: string } | null;
@@ -99,8 +111,6 @@ export function CredentialsPanel({ onClose }: { onClose: () => void }) {
           ? current.map((credential) => credential.id === payload.credential!.id ? payload.credential! : credential)
           : [...current, payload.credential!];
       });
-      // The API key is cleared immediately after a successful save; it is never
-      // retained in component state beyond the in-flight request.
       resetForm();
       setMessage(editingId ? "Provider key updated." : "Provider key saved.");
     } catch (error) {
@@ -116,6 +126,10 @@ export function CredentialsPanel({ onClose }: { onClose: () => void }) {
     setConfirmDeleteId(null);
     setMessage("");
     setFailed(false);
+    // The endpoint is pre-filled empty on purpose: the client only holds the
+    // masked endpoint, never the full value. Leaving it blank keeps the stored
+    // endpoint; the user may enter a new one to change it. The key starts blank
+    // and stays blank to keep the existing key.
     setForm({
       provider: credential.provider,
       label: credential.label ?? "",
@@ -217,7 +231,7 @@ export function CredentialsPanel({ onClose }: { onClose: () => void }) {
             </label>
           </div>
           <label>
-            Endpoint (HTTPS only)
+            Endpoint (HTTPS only) {editingId && <span className={styles.optional}>(leave blank to keep your existing endpoint)</span>}
             <input
               value={form.endpoint}
               maxLength={2048}

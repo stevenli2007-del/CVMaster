@@ -26,6 +26,17 @@ export type CredentialInput = {
   apiKey: string;
 };
 
+// Replace input: apiKey and endpoint may be omitted to keep the existing
+// value; provider/protocol/label/model are always re-specified.
+export type CredentialReplaceInput = {
+  provider: string;
+  label?: string | null | undefined;
+  model?: string | null | undefined;
+  endpoint?: string | null | undefined;
+  protocol: string;
+  apiKey?: string | null | undefined;
+};
+
 export type CredentialError =
   | { kind: "unauthenticated" }
   | { kind: "invalid_input"; message: string }
@@ -118,18 +129,21 @@ export async function saveCredential(
 // Replace an existing credential's key + config in place (ADR-001 §4). Owner
 // is verified; the credential_id stays stable so consents/runs keep pointing
 // at the same logical credential while the ciphertext is swapped.
+//
+// The API key may be left blank to keep the existing key. Because the provider
+// is bound into the ciphertext AAD, keeping the key requires the provider to
+// remain unchanged; a blank key with a changed provider is rejected. The
+// endpoint may also be left blank to keep the existing (already-validated)
+// endpoint.
 export async function replaceCredential(
   admin: AdminClient,
   userId: string,
   credentialId: string,
-  input: CredentialInput,
+  input: CredentialReplaceInput,
 ): Promise<CredentialResult<CredentialDTO>> {
-  const endpointResult = await validateEndpoint(input.endpoint);
-  if (!endpointResult.ok) return { ok: false, error: { kind: "endpoint", code: endpointResult.code } };
-
   const { data: existing, error: readError } = await admin
     .from("ai_credentials")
-    .select("id, user_id")
+    .select("id, user_id, provider, endpoint")
     .eq("id", credentialId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -137,36 +151,61 @@ export async function replaceCredential(
   if (!existing) return { ok: false, error: { kind: "not_found" } };
 
   const provider = normalizeProvider(input.provider);
-  let sealed;
-  try {
-    sealed = sealCredentialKey({
-      plaintextKey: input.apiKey,
-      userId,
-      credentialId,
-      provider,
-    });
-  } catch (err) {
-    const message = err instanceof Error && err.message.includes("KEK") ? err.message : "Could not secure this API key.";
-    return { ok: false, error: { kind: "crypto_unavailable", message } };
+  const keepKey = !input.apiKey || input.apiKey.trim().length === 0;
+
+  // Keeping the existing key requires the provider to stay the same, since the
+  // provider is part of the AAD used to seal the stored ciphertext.
+  if (keepKey && provider !== existing.provider) {
+    return { ok: false, error: { kind: "invalid_input", message: "To keep the existing key, the provider must stay the same. Enter a new key to change providers." } };
+  }
+
+  // Endpoint: blank keeps the existing value; otherwise re-validate.
+  let normalizedEndpoint: string;
+  if (!input.endpoint || input.endpoint.trim().length === 0) {
+    normalizedEndpoint = existing.endpoint;
+  } else {
+    const endpointResult = await validateEndpoint(input.endpoint);
+    if (!endpointResult.ok) return { ok: false, error: { kind: "endpoint", code: endpointResult.code } };
+    normalizedEndpoint = endpointResult.normalized;
+  }
+
+  // Build the update payload. Ciphertext columns are only included when the
+  // key is being rotated; otherwise the stored ciphertext is preserved.
+  type CredentialUpdate = Database["public"]["Tables"]["ai_credentials"]["Update"];
+  const update: CredentialUpdate = {
+    provider,
+    label: input.label?.trim() || null,
+    model: input.model?.trim() || null,
+    endpoint: normalizedEndpoint,
+    protocol: normalizeProtocol(input.protocol),
+  };
+
+  if (!keepKey) {
+    let sealed;
+    try {
+      sealed = sealCredentialKey({
+        plaintextKey: input.apiKey!,
+        userId,
+        credentialId,
+        provider,
+      });
+    } catch (err) {
+      const message = err instanceof Error && err.message.includes("KEK") ? err.message : "Could not secure this API key.";
+      return { ok: false, error: { kind: "crypto_unavailable", message } };
+    }
+    update.last_four = sealed.lastFour;
+    update.ciphertext = sealed.ciphertext;
+    update.nonce = sealed.nonce;
+    update.wrapped_dek = sealed.wrappedDek;
+    update.wrapped_dek_nonce = sealed.wrappedDekNonce;
+    update.wrapped_dek_tag = sealed.wrappedDekTag;
+    update.kek_version = sealed.kekVersion;
+    update.rotated_at = new Date().toISOString();
   }
 
   const { data, error } = await admin
     .from("ai_credentials")
-    .update({
-      provider,
-      label: input.label?.trim() || null,
-      model: input.model?.trim() || null,
-      endpoint: endpointResult.normalized,
-      protocol: normalizeProtocol(input.protocol),
-      last_four: sealed.lastFour,
-      ciphertext: sealed.ciphertext,
-      nonce: sealed.nonce,
-      wrapped_dek: sealed.wrappedDek,
-      wrapped_dek_nonce: sealed.wrappedDekNonce,
-      wrapped_dek_tag: sealed.wrappedDekTag,
-      kek_version: sealed.kekVersion,
-      rotated_at: new Date().toISOString(),
-    })
+    .update(update)
     .eq("id", credentialId)
     .eq("user_id", userId)
     .select("id, user_id, provider, label, model, endpoint, protocol, last_four, status, created_at, updated_at")

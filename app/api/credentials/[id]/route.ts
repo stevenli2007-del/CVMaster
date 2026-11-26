@@ -48,7 +48,7 @@ export async function PUT(
 
   const parsed = credentialReplaceInputSchema.safeParse(body);
   if (!parsed.success) {
-    return toErrorResponse({ kind: "invalid_input", message: "Enter a provider, endpoint, protocol, and API key." });
+    return toErrorResponse({ kind: "invalid_input", message: "Enter a provider and protocol. Leave the key blank to keep the existing key, and the endpoint blank to keep the existing endpoint." });
   }
 
   const admin = createAdminClient();
