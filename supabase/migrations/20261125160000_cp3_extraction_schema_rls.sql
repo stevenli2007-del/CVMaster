@@ -228,6 +228,64 @@ alter table public.materials
 -- ---------------------------------------------------------------------------
 do $$
 begin
+  -- Composite (id, user_id) unique keys. Every composite owner FK below needs
+  -- its referenced table to carry a unique constraint on (id, user_id). CP2
+  -- already added these for materials and experiences; the CP3 tables add
+  -- their own here (guarded so reruns converge).
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.ai_credentials'::regclass
+      and conname = 'ai_credentials_id_user_id_key'
+  ) then
+    alter table public.ai_credentials
+      add constraint ai_credentials_id_user_id_key unique (id, user_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.material_revisions'::regclass
+      and conname = 'material_revisions_id_user_id_key'
+  ) then
+    alter table public.material_revisions
+      add constraint material_revisions_id_user_id_key unique (id, user_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.material_segments'::regclass
+      and conname = 'material_segments_id_user_id_key'
+  ) then
+    alter table public.material_segments
+      add constraint material_segments_id_user_id_key unique (id, user_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.extraction_consents'::regclass
+      and conname = 'extraction_consents_id_user_id_key'
+  ) then
+    alter table public.extraction_consents
+      add constraint extraction_consents_id_user_id_key unique (id, user_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.extraction_runs'::regclass
+      and conname = 'extraction_runs_id_user_id_key'
+  ) then
+    alter table public.extraction_runs
+      add constraint extraction_runs_id_user_id_key unique (id, user_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.claims'::regclass
+      and conname = 'claims_id_user_id_key'
+  ) then
+    alter table public.claims
+      add constraint claims_id_user_id_key unique (id, user_id);
+  end if;
+
   -- material_revisions -> materials, same owner
   if not exists (
     select 1 from pg_constraint
