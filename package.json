@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test:isolation": "node --env-file=.env.local scripts/verify-cp2.mjs"
+    "test:isolation": "node --env-file=.env.local scripts/verify-cp2.mjs",
+    "test:byok": "node --experimental-strip-types --test test/byok-crypto.test.ts test/byok-endpoint.test.ts"
   },
   "dependencies": {
     "@react-three/drei": "10.7.9",

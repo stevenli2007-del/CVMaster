@@ -10,6 +10,7 @@ import {
   renameExperience,
 } from "@/app/actions";
 import { AccountMenu } from "@/components/account-menu";
+import { CredentialsPanel } from "@/components/credentials-panel";
 import { PlusIcon, ResetIcon, SparkIcon } from "@/components/icons";
 import { StarPanel } from "@/components/star-panel";
 import { useReducedMotion } from "@/lib/use-reduced-motion";
@@ -71,6 +72,7 @@ export function Workspace({ initialWorkspace }: { initialWorkspace: WorkspaceDTO
   const [announcement, setAnnouncement] = useState("");
   const [creating, setCreating] = useState(false);
   const [workspaceError, setWorkspaceError] = useState("");
+  const [showCredentials, setShowCredentials] = useState(false);
   const newStarButtonRef = useRef<HTMLButtonElement>(null);
   const reducedMotion = useReducedMotion();
   const selectedStar = stars.find((star) => star.id === selectedId) ?? null;
@@ -206,6 +208,9 @@ export function Workspace({ initialWorkspace }: { initialWorkspace: WorkspaceDTO
         </div>
         <div className={styles.headerActions}>
           {reducedMotion && <span className={styles.motionBadge}>Reduced motion</span>}
+          <button className={styles.resetButton} type="button" onClick={() => setShowCredentials(true)}>
+            Provider keys
+          </button>
           <button className={styles.resetButton} type="button" onClick={resetView}>
             <ResetIcon width={15} height={15} />Reset view
           </button>
@@ -268,6 +273,8 @@ export function Workspace({ initialWorkspace }: { initialWorkspace: WorkspaceDTO
           onClose={closePanel}
         />
       )}
+
+      {showCredentials && <CredentialsPanel onClose={() => setShowCredentials(false)} />}
 
       <p className={styles.srOnly} role="status" aria-live="polite">{announcement}</p>
     </main>

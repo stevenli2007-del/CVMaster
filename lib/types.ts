@@ -28,6 +28,21 @@ export type MaterialDTO = {
   createdAt: string;
 };
 
+// BYOK credential metadata — the ONLY shape a client may see. The API key,
+// ciphertext, wrapped DEK, and KEK material never appear in a DTO.
+export type CredentialDTO = {
+  id: string;
+  provider: string;
+  label: string | null;
+  model: string | null;
+  maskedEndpoint: string;
+  protocol: string;
+  lastFour: string | null;
+  status: "active" | "deleting";
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type WorkspaceExperienceDTO = ExperienceDTO & {
   materials: MaterialDTO[];
 };
