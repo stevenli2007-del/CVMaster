@@ -119,6 +119,10 @@ export async function createTextMaterial(experienceId: string, value: string): P
   const isLink = link?.success === true;
   const hostname = isLink ? new URL(link.data).hostname.toLowerCase() : "";
   const type = isLink ? (hostname === "github.com" || hostname === "www.github.com" ? "github" : "web") : "note";
+  // Only the note/link source-capture allowlist columns are written here.
+  // processing_status falls back to its DB default ('ready'); object_key, file
+  // metadata, content_hash, and current_revision_id are server-managed and are
+  // not writable by the authenticated client.
   const { data, error } = await context.supabase
     .from("materials")
     .insert({
@@ -127,7 +131,6 @@ export async function createTextMaterial(experienceId: string, value: string): P
       type,
       source_url: isLink ? link.data : null,
       text_content: isLink ? null : note.data,
-      processing_status: "ready",
     })
     .select("*")
     .single();

@@ -78,6 +78,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "This star is unavailable or no longer exists." }, { status: 404 });
   }
 
+  // Server-managed registration. The material row carries object_key and file
+  // metadata, which are server-managed columns not writable by the authenticated
+  // client (CP3 materials column permissions). Register through the service role
+  // after verifying the caller's session and experience ownership above.
+  const admin = createAdminClient();
+  if (!admin) {
+    return NextResponse.json({ error: "Upload is temporarily unavailable. Please try again later." }, { status: 503 });
+  }
+
   const materialId = crypto.randomUUID();
   const objectKey = `${context.userId}/${experienceId}/${materialId}`;
   const { error: uploadError } = await context.supabase.storage
@@ -87,7 +96,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Upload failed. Your file was not saved; please retry." }, { status: 502 });
   }
 
-  const { data, error: insertError } = await context.supabase
+  const { data, error: insertError } = await admin
     .from("materials")
     .insert({
       id: materialId,
@@ -104,10 +113,7 @@ export async function POST(request: Request) {
     .single();
 
   if (insertError) {
-    const admin = createAdminClient();
-    const cleanupError = admin
-      ? (await admin.storage.from("materials").remove([objectKey])).error
-      : new Error("Server-managed Storage cleanup is not configured");
+    const cleanupError = (await admin.storage.from("materials").remove([objectKey])).error;
     if (cleanupError) {
       return NextResponse.json({
         error: "Upload failed, and cleanup could not be confirmed. An unused private file may remain.",
