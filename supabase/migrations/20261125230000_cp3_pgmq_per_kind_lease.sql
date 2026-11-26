@@ -64,9 +64,7 @@ begin
     -- A single pgmq.read caps at one batch, so looping on a fixed batch size
     -- guarantees no message is left behind before the queue is dropped.
     loop
-      exit when not exists (
-        select 1 from pgmq.q_processing_jobs where archived_at is null
-      );
+      exit when (select queue_length from pgmq.metrics('processing_jobs')) = 0;
 
       -- pgmq.read with vt=1 marks live messages invisible for 1s, so archived
       -- messages are never re-read. Process one batch, archive each drained
